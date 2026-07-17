@@ -497,8 +497,10 @@ function calcTotals(items) {
   return { subtotal, groups, vatTotal, grandTotal: subtotal + vatTotal };
 }
 
-function fmtMoney(n) {
-  const currency = (state.settings && state.settings.currency) || "EUR";
+function fmtMoney(n, currencyOverride) {
+  // currencyOverride laat toe om de valuta van een specifieke factuur/offerte
+  // te gebruiken i.p.v. de standaardvaluta uit Instellingen.
+  const currency = currencyOverride || (state.settings && state.settings.currency) || "EUR";
   try {
     return new Intl.NumberFormat("nl-NL", { style: "currency", currency }).format(n || 0);
   } catch (e) {
@@ -527,6 +529,7 @@ function emptyDraft(type = "factuur") {
     number: suggestNumber(type),
     reference: "",
     language: "nl",
+    currency: (state.settings && state.settings.currency) || "EUR",
     status: "concept",
     date,
     paymentTermDays: state.settings.paymentTermDays,
@@ -752,6 +755,32 @@ function renderNewView() {
       (v) => (draft.language = v)
     )
   );
+  row5.appendChild(
+    makeSelectField(
+      "Valuta",
+      draft.currency || (state.settings && state.settings.currency) || "EUR",
+      [
+        ["EUR", "Euro (€)"],
+        ["USD", "US dollar ($)"],
+        ["GBP", "Brits pond (£)"],
+        ["CHF", "Zwitserse frank (CHF)"],
+        ["custom", "Andere (ISO-code)..."],
+      ],
+      (v) => {
+        if (v === "custom") {
+          const code = (prompt("ISO-valutacode (3 letters), bv. SEK, NOK, JPY:", draft.currency || "EUR") || draft.currency || "EUR")
+            .toUpperCase()
+            .slice(0, 3);
+          draft.currency = code;
+        } else {
+          draft.currency = v;
+        }
+        // Volledige re-render zodat regeltotalen en de totalen-box meteen
+        // de nieuwe valuta tonen.
+        renderView();
+      }
+    )
+  );
   card2.appendChild(row5);
   wrap.appendChild(card2);
 
@@ -772,13 +801,13 @@ function renderNewView() {
   const totals = calcTotals(draft.items);
   const totalsBox = document.createElement("div");
   totalsBox.className = "totals-box";
-  let totalsHtml = `<div class="totals-row"><span>Subtotaal excl. btw</span><span>${fmtMoney(totals.subtotal)}</span></div>`;
+  let totalsHtml = `<div class="totals-row"><span>Subtotaal excl. btw</span><span>${fmtMoney(totals.subtotal, draft.currency)}</span></div>`;
   Object.keys(totals.groups)
     .sort()
     .forEach((rate) => {
-      totalsHtml += `<div class="totals-row"><span>Btw ${rate}%</span><span>${fmtMoney(totals.groups[rate].vat)}</span></div>`;
+      totalsHtml += `<div class="totals-row"><span>Btw ${rate}%</span><span>${fmtMoney(totals.groups[rate].vat, draft.currency)}</span></div>`;
     });
-  totalsHtml += `<div class="totals-row grand"><span>Totaal incl. btw</span><span>${fmtMoney(totals.grandTotal)}</span></div>`;
+  totalsHtml += `<div class="totals-row grand"><span>Totaal incl. btw</span><span>${fmtMoney(totals.grandTotal, draft.currency)}</span></div>`;
   totalsBox.innerHTML = totalsHtml;
   card3.appendChild(totalsBox);
   wrap.appendChild(card3);
@@ -913,7 +942,7 @@ function renderItemsTable(draft) {
     tdTotal.dataset.label = "Totaal";
     tdTotal.className = "col-total";
     tdTotal.id = "line-total-" + idx;
-    tdTotal.textContent = fmtMoney((Number(item.qty) || 0) * (Number(item.price) || 0));
+    tdTotal.textContent = fmtMoney((Number(item.qty) || 0) * (Number(item.price) || 0), draft.currency);
     tr.appendChild(tdTotal);
 
     const tdRemove = document.createElement("td");
@@ -941,17 +970,17 @@ function updateLineTotal(idx) {
   const draft = state.draft;
   const item = draft.items[idx];
   const el = document.getElementById("line-total-" + idx);
-  if (el) el.textContent = fmtMoney((Number(item.qty) || 0) * (Number(item.price) || 0));
+  if (el) el.textContent = fmtMoney((Number(item.qty) || 0) * (Number(item.price) || 0), draft.currency);
   const totals = calcTotals(draft.items);
   const totalsBox = document.querySelector(".totals-box");
   if (totalsBox) {
-    let html = `<div class="totals-row"><span>Subtotaal excl. btw</span><span>${fmtMoney(totals.subtotal)}</span></div>`;
+    let html = `<div class="totals-row"><span>Subtotaal excl. btw</span><span>${fmtMoney(totals.subtotal, draft.currency)}</span></div>`;
     Object.keys(totals.groups)
       .sort()
       .forEach((rate) => {
-        html += `<div class="totals-row"><span>Btw ${rate}%</span><span>${fmtMoney(totals.groups[rate].vat)}</span></div>`;
+        html += `<div class="totals-row"><span>Btw ${rate}%</span><span>${fmtMoney(totals.groups[rate].vat, draft.currency)}</span></div>`;
       });
-    html += `<div class="totals-row grand"><span>Totaal incl. btw</span><span>${fmtMoney(totals.grandTotal)}</span></div>`;
+    html += `<div class="totals-row grand"><span>Totaal incl. btw</span><span>${fmtMoney(totals.grandTotal, draft.currency)}</span></div>`;
     totalsBox.innerHTML = html;
   }
 }
@@ -1149,7 +1178,7 @@ function renderArchiveList(list) {
         <div class="num">${inv.number} — ${inv.clientSnapshot.name || "(geen klantnaam)"}</div>
         <div class="sub">${fmtDate(inv.date)} · ${inv.type === "factuur" ? "vervaldatum" : "geldig tot"} ${fmtDate(inv.dueDate)}</div>
       </div>
-      <div class="amount">${fmtMoney(inv.total)}</div>
+      <div class="amount">${fmtMoney(inv.total, inv.currency)}</div>
     `;
     const statusSelect = document.createElement("select");
     statusSelect.className = "status-select";
@@ -1628,9 +1657,9 @@ async function generatePDF(inv) {
   const rows = inv.items.map((it) => [
     it.desc || "",
     String(it.qty) + (it.unit ? " " + it.unit : ""),
-    fmtMoney(Number(it.price)),
+    fmtMoney(Number(it.price), inv.currency),
     Number(it.vatRate) + "%",
-    fmtMoney((Number(it.qty) || 0) * (Number(it.price) || 0)),
+    fmtMoney((Number(it.qty) || 0) * (Number(it.price) || 0), inv.currency),
   ]);
 
   doc.autoTable({
@@ -1654,13 +1683,13 @@ async function generatePDF(inv) {
   doc.setFontSize(10);
   doc.setTextColor(60);
   doc.text(t.subtotal, totalsX, finalY);
-  doc.text(fmtMoney(totals.subtotal), 555, finalY, { align: "right" });
+  doc.text(fmtMoney(totals.subtotal, inv.currency), 555, finalY, { align: "right" });
   finalY += 16;
   Object.keys(totals.groups)
     .sort()
     .forEach((rate) => {
       doc.text(t.vatGroup(rate), totalsX, finalY);
-      doc.text(fmtMoney(totals.groups[rate].vat), 555, finalY, { align: "right" });
+      doc.text(fmtMoney(totals.groups[rate].vat, inv.currency), 555, finalY, { align: "right" });
       finalY += 16;
     });
   doc.setDrawColor(20);
@@ -1668,7 +1697,7 @@ async function generatePDF(inv) {
   doc.setFontSize(12);
   doc.setTextColor(20);
   doc.text(t.grandTotal, totalsX, finalY + 12);
-  doc.text(fmtMoney(totals.grandTotal), 555, finalY + 12, { align: "right" });
+  doc.text(fmtMoney(totals.grandTotal, inv.currency), 555, finalY + 12, { align: "right" });
   finalY += 40;
 
   if (inv.notes) {
