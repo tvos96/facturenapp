@@ -27,9 +27,15 @@ const DEFAULT_SETTINGS = {
   companyName: "",
   address: "",
   vatNumber: "",
+  kvkNumber: "",
   iban: "",
+  bankName: "",
+  bic: "",
+  phone: "",
+  email: "",
   logoDataUrl: "",
   accentColor: "#1d4ed8",
+  currency: "EUR",
   paymentTermDays: 14,
   nextFactuurNummer: 1,
   nextOfferteNummer: 1,
@@ -492,7 +498,13 @@ function calcTotals(items) {
 }
 
 function fmtMoney(n) {
-  return new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR" }).format(n || 0);
+  const currency = (state.settings && state.settings.currency) || "EUR";
+  try {
+    return new Intl.NumberFormat("nl-NL", { style: "currency", currency }).format(n || 0);
+  } catch (e) {
+    // ongeldige/onbekende valutacode: toon toch een bedrag i.p.v. te crashen
+    return currency + " " + (n || 0).toFixed(2);
+  }
 }
 
 function fmtDate(iso) {
@@ -513,13 +525,15 @@ function emptyDraft(type = "factuur") {
     id: crypto.randomUUID(),
     type,
     number: suggestNumber(type),
+    reference: "",
+    language: "nl",
     status: "concept",
     date,
     paymentTermDays: state.settings.paymentTermDays,
     dueDate: addDays(date, state.settings.paymentTermDays),
     clientId: null,
     clientSnapshot: { name: "", address: "", vatNumber: "", email: "" },
-    items: [{ desc: "", qty: 1, price: 0, vatRate: DEFAULT_VAT_RATES[0] }],
+    items: [{ desc: "", qty: 1, unit: "", price: 0, vatRate: DEFAULT_VAT_RATES[0] }],
     notes: "",
   };
 }
@@ -723,6 +737,22 @@ function renderNewView() {
     )
   );
   card2.appendChild(row4);
+
+  const row5 = document.createElement("div");
+  row5.className = "row";
+  row5.appendChild(makeTextField("Referentie (optioneel)", draft.reference, (v) => (draft.reference = v)));
+  row5.appendChild(
+    makeSelectField(
+      "Taal van het document",
+      draft.language || "nl",
+      [
+        ["nl", "Nederlands"],
+        ["en", "English"],
+      ],
+      (v) => (draft.language = v)
+    )
+  );
+  card2.appendChild(row5);
   wrap.appendChild(card2);
 
   const card3 = document.createElement("div");
@@ -734,7 +764,7 @@ function renderNewView() {
   addBtn.className = "btn btn-secondary btn-sm";
   addBtn.textContent = "+ Regel toevoegen";
   addBtn.addEventListener("click", () => {
-    draft.items.push({ desc: "", qty: 1, price: 0, vatRate: DEFAULT_VAT_RATES[0] });
+    draft.items.push({ desc: "", qty: 1, unit: "", price: 0, vatRate: DEFAULT_VAT_RATES[0] });
     renderView();
   });
   card3.appendChild(addBtn);
@@ -792,7 +822,7 @@ function renderItemsTable(draft) {
   const table = document.createElement("table");
   table.className = "items-table";
   table.innerHTML = `<thead><tr>
-    <th>Omschrijving</th><th class="col-qty">Aantal</th><th class="col-price">Prijs</th>
+    <th>Omschrijving</th><th class="col-qty">Aantal</th><th class="col-unit">Eenheid</th><th class="col-price">Prijs</th>
     <th class="col-vat">Btw</th><th class="col-total">Totaal</th><th class="col-remove"></th>
   </tr></thead>`;
   const tbody = document.createElement("tbody");
@@ -823,6 +853,16 @@ function renderItemsTable(draft) {
     });
     tdQty.appendChild(qtyInput);
     tr.appendChild(tdQty);
+
+    const tdUnit = document.createElement("td");
+    tdUnit.dataset.label = "Eenheid";
+    tdUnit.className = "col-unit";
+    const unitInput = document.createElement("input");
+    unitInput.value = item.unit || "";
+    unitInput.placeholder = "dag, uur, km, stuks...";
+    unitInput.addEventListener("input", () => (item.unit = unitInput.value));
+    tdUnit.appendChild(unitInput);
+    tr.appendChild(tdUnit);
 
     const tdPrice = document.createElement("td");
     tdPrice.dataset.label = "Prijs (excl. btw)";
@@ -1339,14 +1379,27 @@ function renderSettingsView() {
   const row = document.createElement("div");
   row.className = "row";
   row.appendChild(makeTextField("Btw-nummer", s.vatNumber, (v) => (s.vatNumber = v)));
-  row.appendChild(makeTextField("IBAN", s.iban, (v) => (s.iban = v)));
+  row.appendChild(makeTextField("KvK-nummer", s.kvkNumber, (v) => (s.kvkNumber = v)));
   card.appendChild(row);
+  const rowBank = document.createElement("div");
+  rowBank.className = "row";
+  rowBank.appendChild(makeTextField("IBAN", s.iban, (v) => (s.iban = v)));
+  rowBank.appendChild(makeTextField("Banknaam", s.bankName, (v) => (s.bankName = v)));
+  rowBank.appendChild(makeTextField("BIC/SWIFT", s.bic, (v) => (s.bic = v)));
+  card.appendChild(rowBank);
+  const rowContact = document.createElement("div");
+  rowContact.className = "row";
+  rowContact.appendChild(makeTextField("Telefoonnummer", s.phone, (v) => (s.phone = v)));
+  rowContact.appendChild(makeTextField("E-mailadres (bedrijf)", s.email, (v) => (s.email = v)));
+  card.appendChild(rowContact);
   wrap.appendChild(card);
 
   const card2 = document.createElement("div");
   card2.className = "card";
   card2.innerHTML = `<h2>Standaardwaarden nieuwe factuur/offerte</h2>`;
-  card2.appendChild(
+  const rowDefaults = document.createElement("div");
+  rowDefaults.className = "row";
+  rowDefaults.appendChild(
     makeSelectField(
       "Standaard betalingstermijn",
       String(s.paymentTermDays),
@@ -1354,6 +1407,31 @@ function renderSettingsView() {
       (v) => (s.paymentTermDays = Number(v))
     )
   );
+  rowDefaults.appendChild(
+    makeSelectField(
+      "Valuta",
+      s.currency || "EUR",
+      [
+        ["EUR", "Euro (€)"],
+        ["USD", "US dollar ($)"],
+        ["GBP", "Brits pond (£)"],
+        ["CHF", "Zwitserse frank (CHF)"],
+        ["custom", "Andere (ISO-code)..."],
+      ],
+      (v) => {
+        if (v === "custom") {
+          const code = (prompt("ISO-valutacode (3 letters), bv. SEK, NOK, JPY:", s.currency || "EUR") || s.currency || "EUR")
+            .toUpperCase()
+            .slice(0, 3);
+          s.currency = code;
+        } else {
+          s.currency = v;
+        }
+        renderView();
+      }
+    )
+  );
+  card2.appendChild(rowDefaults);
   const row2 = document.createElement("div");
   row2.className = "row";
   row2.appendChild(makeTextField("Volgend factuurnummer", suggestNumber("factuur"), () => {}, { readOnly: true }));
@@ -1409,10 +1487,66 @@ function resizeImageToDataUrl(file, maxWidth) {
 // ==========================================================================
 // PDF GENERATIE
 // ==========================================================================
+const PDF_I18N = {
+  nl: {
+    title: { factuur: "FACTUUR", offerte: "OFFERTE" },
+    to: "Aan:",
+    number: { factuur: "Factuurnummer:", offerte: "Offertenummer:" },
+    date: "Datum:",
+    dueDate: { factuur: "Vervaldatum:", offerte: "Geldig tot:" },
+    reference: "Referentie:",
+    vatNumber: "Btw-nummer:",
+    kvk: "KvK-nummer:",
+    iban: "IBAN:",
+    bank: "Bank:",
+    bic: "BIC:",
+    phone: "Tel:",
+    email: "E-mail:",
+    colDesc: "Omschrijving",
+    colQty: "Aantal",
+    colPrice: "Prijs",
+    colVat: "Btw",
+    colTotal: "Totaal",
+    subtotal: "Subtotaal excl. btw",
+    vatGroup: (rate) => `Btw ${rate}%`,
+    grandTotal: "Totaal incl. btw",
+    paymentNote: (date, iban, number) => `Gelieve te betalen voor ${date} op IBAN ${iban} o.v.v. ${number}.`,
+  },
+  en: {
+    title: { factuur: "INVOICE", offerte: "QUOTATION" },
+    to: "To:",
+    number: { factuur: "Invoice number:", offerte: "Quotation number:" },
+    date: "Date:",
+    dueDate: { factuur: "Due date:", offerte: "Valid until:" },
+    reference: "Reference:",
+    vatNumber: "VAT number:",
+    kvk: "Chamber of Commerce no.:",
+    iban: "IBAN:",
+    bank: "Bank:",
+    bic: "BIC:",
+    phone: "Phone:",
+    email: "Email:",
+    colDesc: "Description",
+    colQty: "Quantity",
+    colPrice: "Price",
+    colVat: "VAT",
+    colTotal: "Total",
+    subtotal: "Subtotal excl. VAT",
+    vatGroup: (rate) => `VAT ${rate}%`,
+    grandTotal: "Total incl. VAT",
+    paymentNote: (date, iban, number) => `Please pay before ${date} to IBAN ${iban}, quoting ${number}.`,
+  },
+};
+
+function pdfT(lang) {
+  return PDF_I18N[lang] || PDF_I18N.nl;
+}
+
 async function generatePDF(inv) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const s = state.settings;
+  const t = pdfT(inv.language);
   const marginX = 40;
   let y = 50;
   let logoBottom = y;
@@ -1437,7 +1571,17 @@ async function generatePDF(inv) {
 
   doc.setFontSize(10);
   doc.setTextColor(60);
-  const companyLines = [s.companyName, s.address, s.vatNumber ? "Btw-nummer: " + s.vatNumber : "", s.iban ? "IBAN: " + s.iban : ""].filter(Boolean);
+  const companyLines = [
+    s.companyName,
+    s.address,
+    s.vatNumber ? t.vatNumber + " " + s.vatNumber : "",
+    s.kvkNumber ? t.kvk + " " + s.kvkNumber : "",
+    s.iban ? t.iban + " " + s.iban : "",
+    s.bankName ? t.bank + " " + s.bankName : "",
+    s.bic ? t.bic + " " + s.bic : "",
+    s.phone ? t.phone + " " + s.phone : "",
+    s.email ? t.email + " " + s.email : "",
+  ].filter(Boolean);
   doc.text(companyLines, 555, y, { align: "right" });
   const companyBottom = y + companyLines.length * 12;
 
@@ -1446,7 +1590,7 @@ async function generatePDF(inv) {
   y = Math.max(logoBottom, companyBottom) + 30;
   doc.setFontSize(20);
   doc.setTextColor(20);
-  doc.text(inv.type === "factuur" ? "FACTUUR" : "OFFERTE", marginX, y);
+  doc.text(t.title[inv.type], marginX, y);
 
   y += 10;
   doc.setDrawColor(220);
@@ -1455,22 +1599,23 @@ async function generatePDF(inv) {
   y += 28;
   doc.setFontSize(11);
   doc.setTextColor(40);
-  doc.text("Aan:", marginX, y);
+  doc.text(t.to, marginX, y);
   doc.setFontSize(10);
   const clientLines = [
     inv.clientSnapshot.name,
     inv.clientSnapshot.address,
-    inv.clientSnapshot.vatNumber ? "Btw-nummer: " + inv.clientSnapshot.vatNumber : "",
+    inv.clientSnapshot.vatNumber ? t.vatNumber + " " + inv.clientSnapshot.vatNumber : "",
   ].filter(Boolean);
   doc.text(clientLines, marginX, y + 16);
 
   const metaX = 350;
   doc.setFontSize(10);
   const metaLines = [
-    [inv.type === "factuur" ? "Factuurnummer:" : "Offertenummer:", inv.number],
-    ["Datum:", fmtDate(inv.date)],
-    [inv.type === "factuur" ? "Vervaldatum:" : "Geldig tot:", fmtDate(inv.dueDate)],
+    [t.number[inv.type], inv.number],
+    [t.date, fmtDate(inv.date)],
+    [t.dueDate[inv.type], fmtDate(inv.dueDate)],
   ];
+  if (inv.reference) metaLines.push([t.reference, inv.reference]);
   metaLines.forEach((pair, i) => {
     doc.setTextColor(120);
     doc.text(pair[0], metaX, y + i * 16);
@@ -1478,11 +1623,11 @@ async function generatePDF(inv) {
     doc.text(pair[1], metaX + 100, y + i * 16);
   });
 
-  y += 70;
+  y += 70 + (inv.reference ? 16 : 0);
 
   const rows = inv.items.map((it) => [
     it.desc || "",
-    String(it.qty),
+    String(it.qty) + (it.unit ? " " + it.unit : ""),
     fmtMoney(Number(it.price)),
     Number(it.vatRate) + "%",
     fmtMoney((Number(it.qty) || 0) * (Number(it.price) || 0)),
@@ -1490,13 +1635,13 @@ async function generatePDF(inv) {
 
   doc.autoTable({
     startY: y,
-    head: [["Omschrijving", "Aantal", "Prijs", "Btw", "Totaal"]],
+    head: [[t.colDesc, t.colQty, t.colPrice, t.colVat, t.colTotal]],
     body: rows,
     margin: { left: marginX, right: 40 },
     styles: { fontSize: 9.5, cellPadding: 6 },
     headStyles: { fillColor: hexToRgb(s.accentColor), textColor: 255 },
     columnStyles: {
-      1: { halign: "right", cellWidth: 55 },
+      1: { halign: "right", cellWidth: 65 },
       2: { halign: "right", cellWidth: 75 },
       3: { halign: "right", cellWidth: 45 },
       4: { halign: "right", cellWidth: 75 },
@@ -1508,13 +1653,13 @@ async function generatePDF(inv) {
   const totalsX = 380;
   doc.setFontSize(10);
   doc.setTextColor(60);
-  doc.text("Subtotaal excl. btw", totalsX, finalY);
+  doc.text(t.subtotal, totalsX, finalY);
   doc.text(fmtMoney(totals.subtotal), 555, finalY, { align: "right" });
   finalY += 16;
   Object.keys(totals.groups)
     .sort()
     .forEach((rate) => {
-      doc.text(`Btw ${rate}%`, totalsX, finalY);
+      doc.text(t.vatGroup(rate), totalsX, finalY);
       doc.text(fmtMoney(totals.groups[rate].vat), 555, finalY, { align: "right" });
       finalY += 16;
     });
@@ -1522,7 +1667,7 @@ async function generatePDF(inv) {
   doc.line(totalsX, finalY - 4, 555, finalY - 4);
   doc.setFontSize(12);
   doc.setTextColor(20);
-  doc.text("Totaal incl. btw", totalsX, finalY + 12);
+  doc.text(t.grandTotal, totalsX, finalY + 12);
   doc.text(fmtMoney(totals.grandTotal), 555, finalY + 12, { align: "right" });
   finalY += 40;
 
@@ -1537,7 +1682,7 @@ async function generatePDF(inv) {
   if (inv.type === "factuur" && s.iban) {
     doc.setFontSize(9.5);
     doc.setTextColor(90);
-    doc.text(`Gelieve te betalen voor ${fmtDate(inv.dueDate)} op IBAN ${s.iban} o.v.v. ${inv.number}.`, marginX, finalY);
+    doc.text(t.paymentNote(fmtDate(inv.dueDate), s.iban, inv.number), marginX, finalY);
   }
 
   doc.save(`${inv.number}.pdf`);

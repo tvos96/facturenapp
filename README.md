@@ -69,13 +69,16 @@ GitHub Pages-URL als de rest van de app.
 
 1. Open de app en kies een inlogknop (Google of Microsoft).
 2. Vul eerst bij **Instellingen** je bedrijfsgegevens in (naam, adres,
-   btw-nummer, IBAN, logo, accentkleur voor de PDF, standaard betalingstermijn).
+   btw-nummer, KvK-nummer, IBAN, banknaam, BIC/SWIFT, telefoonnummer, e-mail,
+   logo, accentkleur voor de PDF, standaard betalingstermijn en valuta).
 3. Voeg eventueel klanten toe bij **Klanten** — of vul bij **Nieuw** de
    klantgegevens direct in en klik op "Opslaan als nieuwe klant" om ze meteen
    te bewaren voor volgende keren.
 4. Maak een nieuwe factuur of offerte bij **Nieuw**: kies het type, kies een
-   klant (of vul handmatig in), voeg regels toe, kies btw-percentages, en sla
-   op. Nummering gebeurt automatisch maar is altijd handmatig aan te passen.
+   klant (of vul handmatig in), vul optioneel een referentie in en kies de
+   taal van het document (Nederlands/Engels), voeg regels toe (met aantal,
+   eenheid, prijs en btw-percentage), en sla op. Nummering gebeurt automatisch
+   maar is altijd handmatig aan te passen.
 5. Download de PDF direct na het aanmaken, of later via **Archief** — filter
    daar op type (factuur/offerte), status of zoek op klantnaam/nummer. In het
    Archief kun je per regel ook direct de status wijzigen of de factuur/
