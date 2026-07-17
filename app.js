@@ -40,6 +40,19 @@ const DEFAULT_SETTINGS = {
   nextFactuurNummer: 1,
   nextOfferteNummer: 1,
   numberPrefix: { factuur: "F", offerte: "O" },
+  // Notitiesjablonen: elk sjabloon heeft een tekst in het Nederlands en in het
+  // Engels, zodat de juiste taalversie op de PDF komt. defaultNoteTemplateId
+  // wijst naar het sjabloon dat automatisch wordt ingevuld bij een nieuwe
+  // factuur/offerte.
+  noteTemplates: [
+    {
+      id: "default-standaard",
+      name: "Standaard",
+      nl: "Bedankt voor uw vertrouwen. Heeft u vragen, neem dan gerust contact met ons op.",
+      en: "Thank you for your business. If you have any questions, please don't hesitate to contact us.",
+    },
+  ],
+  defaultNoteTemplateId: "default-standaard",
 };
 
 const STATUS_OPTIONS = {
@@ -523,12 +536,16 @@ function hexToRgb(hex) {
 
 function emptyDraft(type = "factuur") {
   const date = todayISO();
+  const language = "nl";
+  const defaultTemplate = ((state.settings && state.settings.noteTemplates) || []).find(
+    (t) => t.id === state.settings.defaultNoteTemplateId
+  );
   return {
     id: crypto.randomUUID(),
     type,
     number: suggestNumber(type),
     reference: "",
-    language: "nl",
+    language,
     currency: (state.settings && state.settings.currency) || "EUR",
     status: "concept",
     date,
@@ -537,7 +554,7 @@ function emptyDraft(type = "factuur") {
     clientId: null,
     clientSnapshot: { name: "", address: "", vatNumber: "", email: "" },
     items: [{ desc: "", qty: 1, unit: "", price: 0, vatRate: DEFAULT_VAT_RATES[0] }],
-    notes: "",
+    notes: defaultTemplate ? defaultTemplate[language] || "" : "",
   };
 }
 
@@ -752,7 +769,21 @@ function renderNewView() {
         ["nl", "Nederlands"],
         ["en", "English"],
       ],
-      (v) => (draft.language = v)
+      (v) => {
+        const oldLang = draft.language || "nl";
+        // Als de huidige notities exact overeenkomen met een bekend sjabloon
+        // in de oude taal, meteen meeswitchen naar dezelfde tekst in de
+        // nieuwe taal. Handmatig aangepaste notities blijven ongemoeid.
+        const templates = (state.settings && state.settings.noteTemplates) || [];
+        const matchedTemplate = templates.find(
+          (tpl) => (draft.notes || "").trim() !== "" && (tpl[oldLang] || "") === draft.notes
+        );
+        draft.language = v;
+        if (matchedTemplate) {
+          draft.notes = matchedTemplate[v] || matchedTemplate.nl || "";
+        }
+        renderView();
+      }
     )
   );
   row5.appendChild(
@@ -814,6 +845,25 @@ function renderNewView() {
 
   const card4 = document.createElement("div");
   card4.className = "card";
+  card4.innerHTML = `<h2>Notities</h2>`;
+  const noteTemplates = (state.settings && state.settings.noteTemplates) || [];
+  if (noteTemplates.length) {
+    card4.appendChild(
+      makeSelectField(
+        "Notitiesjabloon invoegen",
+        "",
+        [["", "— Kies een sjabloon —"], ...noteTemplates.map((tpl) => [tpl.id, tpl.name])],
+        (v) => {
+          if (!v) return;
+          const tpl = noteTemplates.find((x) => x.id === v);
+          if (tpl) {
+            draft.notes = tpl[draft.language || "nl"] || tpl.nl || "";
+            renderView();
+          }
+        }
+      )
+    );
+  }
   card4.appendChild(makeTextAreaField("Notities (optioneel, komt op de " + draft.type + ")", draft.notes, (v) => (draft.notes = v)));
   wrap.appendChild(card4);
 
@@ -1357,6 +1407,73 @@ function openClientModal(client) {
   document.body.appendChild(backdrop);
 }
 
+function openNoteTemplateModal(template) {
+  const isNew = !template;
+  const draftTpl = template ? { ...template } : { id: crypto.randomUUID(), name: "", nl: "", en: "" };
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  const modal = document.createElement("div");
+  modal.className = "modal";
+  modal.innerHTML = `<h2>${isNew ? "Nieuw notitiesjabloon" : "Sjabloon bewerken"}</h2>`;
+
+  modal.appendChild(makeTextField("Naam van het sjabloon", draftTpl.name, (v) => (draftTpl.name = v)));
+  modal.appendChild(makeTextAreaField("Tekst (Nederlands)", draftTpl.nl, (v) => (draftTpl.nl = v)));
+  modal.appendChild(makeTextAreaField("Tekst (Engels)", draftTpl.en, (v) => (draftTpl.en = v)));
+
+  const defaultField = document.createElement("div");
+  defaultField.className = "field";
+  const defaultLabel = document.createElement("label");
+  defaultLabel.style.cssText = "display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text);";
+  const defaultCheckbox = document.createElement("input");
+  defaultCheckbox.type = "checkbox";
+  defaultCheckbox.checked = state.settings.defaultNoteTemplateId === draftTpl.id;
+  defaultLabel.appendChild(defaultCheckbox);
+  defaultLabel.appendChild(
+    document.createTextNode("Gebruik als standaard (wordt automatisch ingevuld bij een nieuwe factuur/offerte)")
+  );
+  defaultField.appendChild(defaultLabel);
+  modal.appendChild(defaultField);
+
+  const actions = document.createElement("div");
+  actions.className = "row";
+  const saveBtn = document.createElement("button");
+  saveBtn.className = "btn btn-primary";
+  saveBtn.textContent = "Opslaan";
+  saveBtn.addEventListener("click", async () => {
+    if (!draftTpl.name.trim()) {
+      toast("Vul een naam in voor het sjabloon.");
+      return;
+    }
+    if (!state.settings.noteTemplates) state.settings.noteTemplates = [];
+    const idx = state.settings.noteTemplates.findIndex((t) => t.id === draftTpl.id);
+    if (idx >= 0) state.settings.noteTemplates[idx] = draftTpl;
+    else state.settings.noteTemplates.push(draftTpl);
+    if (defaultCheckbox.checked) {
+      state.settings.defaultNoteTemplateId = draftTpl.id;
+    } else if (state.settings.defaultNoteTemplateId === draftTpl.id) {
+      state.settings.defaultNoteTemplateId = null;
+    }
+    await saveSettings();
+    backdrop.remove();
+    renderView();
+  });
+  actions.appendChild(saveBtn);
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.className = "btn btn-ghost";
+  cancelBtn.textContent = "Annuleren";
+  cancelBtn.addEventListener("click", () => backdrop.remove());
+  actions.appendChild(cancelBtn);
+
+  modal.appendChild(actions);
+  backdrop.appendChild(modal);
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) backdrop.remove();
+  });
+  document.body.appendChild(backdrop);
+}
+
 // ==========================================================================
 // VIEW: INSTELLINGEN
 // ==========================================================================
@@ -1471,6 +1588,68 @@ function renderSettingsView() {
   hint.textContent = "Deze nummers worden automatisch opgehoogd zodra je een factuur/offerte met dat nummer opslaat. Je kunt het nummer bij het aanmaken altijd zelf aanpassen.";
   card2.appendChild(hint);
   wrap.appendChild(card2);
+
+  const cardNotes = document.createElement("div");
+  cardNotes.className = "card";
+  cardNotes.innerHTML = `<h2>Notitiesjablonen</h2><p style="color:#667085;font-size:0.85rem;margin-top:-8px;">Kant-en-klare teksten voor het notitieveld op een factuur/offerte, in het Nederlands en Engels. Het standaardsjabloon wordt automatisch ingevuld bij een nieuwe factuur/offerte, in de taal die je daarvoor kiest.</p>`;
+  const noteTemplates = s.noteTemplates || [];
+  if (!noteTemplates.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "Nog geen sjablonen toegevoegd.";
+    cardNotes.appendChild(empty);
+  } else {
+    noteTemplates.forEach((tpl) => {
+      const isDefault = s.defaultNoteTemplateId === tpl.id;
+      const row = document.createElement("div");
+      row.className = "list-row";
+      const preview = (tpl.nl || tpl.en || "").slice(0, 70);
+      row.innerHTML = `
+        <div class="col-main">
+          <div class="name">${tpl.name}${isDefault ? ' <span class="badge badge-verzonden">Standaard</span>' : ""}</div>
+          <div class="sub">${preview}${(tpl.nl || tpl.en || "").length > 70 ? "…" : ""}</div>
+        </div>
+      `;
+      if (!isDefault) {
+        const defBtn = document.createElement("button");
+        defBtn.className = "btn btn-ghost btn-sm";
+        defBtn.textContent = "Als standaard instellen";
+        defBtn.addEventListener("click", async () => {
+          s.defaultNoteTemplateId = tpl.id;
+          await saveSettings();
+          toast("Standaardsjabloon ingesteld.");
+          renderView();
+        });
+        row.appendChild(defBtn);
+      }
+      const editBtn = document.createElement("button");
+      editBtn.className = "btn btn-ghost btn-sm";
+      editBtn.textContent = "Bewerken";
+      editBtn.addEventListener("click", () => openNoteTemplateModal(tpl));
+      row.appendChild(editBtn);
+
+      const delBtn = document.createElement("button");
+      delBtn.className = "btn btn-danger btn-sm";
+      delBtn.textContent = "Verwijderen";
+      delBtn.addEventListener("click", async () => {
+        if (!confirm(`Sjabloon "${tpl.name}" verwijderen?`)) return;
+        s.noteTemplates = s.noteTemplates.filter((x) => x.id !== tpl.id);
+        if (s.defaultNoteTemplateId === tpl.id) s.defaultNoteTemplateId = null;
+        await saveSettings();
+        renderView();
+      });
+      row.appendChild(delBtn);
+
+      cardNotes.appendChild(row);
+    });
+  }
+  const addTplBtn = document.createElement("button");
+  addTplBtn.className = "btn btn-secondary btn-sm";
+  addTplBtn.textContent = "+ Nieuw sjabloon";
+  addTplBtn.style.marginTop = "6px";
+  addTplBtn.addEventListener("click", () => openNoteTemplateModal(null));
+  cardNotes.appendChild(addTplBtn);
+  wrap.appendChild(cardNotes);
 
   const card3 = document.createElement("div");
   card3.className = "card";

@@ -70,19 +70,35 @@ GitHub Pages-URL als de rest van de app.
 1. Open de app en kies een inlogknop (Google of Microsoft).
 2. Vul eerst bij **Instellingen** je bedrijfsgegevens in (naam, adres,
    btw-nummer, KvK-nummer, IBAN, banknaam, BIC/SWIFT, telefoonnummer, e-mail,
-   logo, accentkleur voor de PDF, standaard betalingstermijn en valuta).
+   logo, accentkleur voor de PDF, standaard betalingstermijn en valuta). Hier
+   beheer je ook je **notitiesjablonen** (zie hieronder).
 3. Voeg eventueel klanten toe bij **Klanten** — of vul bij **Nieuw** de
    klantgegevens direct in en klik op "Opslaan als nieuwe klant" om ze meteen
    te bewaren voor volgende keren.
 4. Maak een nieuwe factuur of offerte bij **Nieuw**: kies het type, kies een
    klant (of vul handmatig in), vul optioneel een referentie in en kies de
-   taal van het document (Nederlands/Engels), voeg regels toe (met aantal,
-   eenheid, prijs en btw-percentage), en sla op. Nummering gebeurt automatisch
-   maar is altijd handmatig aan te passen.
+   taal van het document (Nederlands/Engels) en de valuta (staat standaard op
+   de valuta uit Instellingen, maar is per factuur/offerte aan te passen),
+   voeg regels toe (met aantal, eenheid, prijs en btw-percentage), en sla op.
+   Nummering gebeurt automatisch maar is altijd handmatig aan te passen.
 5. Download de PDF direct na het aanmaken, of later via **Archief** — filter
    daar op type (factuur/offerte), status of zoek op klantnaam/nummer. In het
    Archief kun je per regel ook direct de status wijzigen of de factuur/
    offerte verwijderen.
+
+## Notitiesjablonen
+
+Bij **Instellingen** kun je onder "Notitiesjablonen" kant-en-klare teksten
+aanmaken voor het notitieveld op een factuur/offerte — elk sjabloon heeft een
+tekst in het Nederlands én in het Engels. Eén sjabloon is aan te merken als
+**standaard**: die wordt automatisch ingevuld zodra je een nieuwe factuur of
+offerte aanmaakt, in de taal die op dat moment voor het document is gekozen.
+
+Bij het aanmaken van een factuur/offerte kun je via "Notitiesjabloon invoegen"
+altijd een ander sjabloon kiezen, en de tekst blijft gewoon vrij te bewerken.
+Wissel je daarna van taal (Nederlands ↔ Engels) terwijl de notitie nog exact
+overeenkomt met een sjabloon, dan wisselt de tekst automatisch mee naar de
+juiste taalversie — heb je de tekst zelf aangepast, dan blijft die ongemoeid.
 
 ## Belangrijk om te weten
 
