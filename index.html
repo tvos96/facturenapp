@@ -22,8 +22,10 @@
 <!-- Google Identity Services: inloggen + toegang tot Google Drive -->
 <script src="https://accounts.google.com/gsi/client"></script>
 
-<!-- MSAL.js: inloggen + toegang tot OneDrive (Outlook/Exchange/Microsoft 365) -->
-<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+<!-- MSAL.js: inloggen + toegang tot OneDrive (Outlook/Exchange/Microsoft 365).
+     Let op: Microsoft's eigen CDN (alcdn.msauth.net) gaf een 503-storing op
+     deze versie, daarom via jsDelivr (mirror van hetzelfde npm-pakket). -->
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
 
 <!-- Sign in with Apple JS: alleen voor identiteit (naam/e-mail), geen opslag -->
 <script src="https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js"></script>
