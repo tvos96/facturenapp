@@ -32,12 +32,3 @@ export const MICROSOFT_AUTHORITY = "https://login.microsoftonline.com/common";
 // Files.ReadWrite.AppFolder = alleen toegang tot een eigen map
 // ("OneDrive > Apps > Facturen App"), niet tot de rest van iemands OneDrive.
 export const MICROSOFT_SCOPES = ["Files.ReadWrite.AppFolder", "User.Read"];
-
-// --------------------------------------------------------------------------
-// APPLE (Inloggen met Apple - alleen identiteit, geen bestandsopslag)
-// --------------------------------------------------------------------------
-// Vereist een betaald Apple Developer Program account ($99/jaar) + een
-// geverifieerd domein. Zie README.md. Laat op de placeholder staan als je
-// dit (nog) niet gebruikt - de Apple-knop toont dan een duidelijke melding.
-export const APPLE_CLIENT_ID = "VUL_HIER_JE_APPLE_SERVICES_ID_IN"; // bv. nl.zig.facturenapp.web
-export const APPLE_REDIRECT_URI = "VUL_HIER_JE_GEHOSTE_APP_URL_IN"; // exact zoals bij Apple geconfigureerd, bv. https://tvos96.github.io/facturenapp/

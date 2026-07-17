@@ -27,9 +27,6 @@
      deze versie, daarom via jsDelivr (mirror van hetzelfde npm-pakket). -->
 <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
 
-<!-- Sign in with Apple JS: alleen voor identiteit (naam/e-mail), geen opslag -->
-<script src="https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js"></script>
-
 <!-- jsPDF + autotable: voor het genereren van de PDF facturen/offertes -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
@@ -44,14 +41,6 @@
     <div id="login-buttons" class="login-buttons">
       <button id="login-google" class="btn btn-primary btn-block">Inloggen met Google</button>
       <button id="login-microsoft" class="btn btn-secondary btn-block">Inloggen met Microsoft (Outlook/Exchange)</button>
-      <button id="login-apple" class="btn btn-ghost btn-block">Inloggen met Apple</button>
-    </div>
-
-    <div id="storage-picker" class="login-buttons hidden">
-      <p class="storage-picker-intro">Ingelogd als <strong id="apple-identity-label"></strong>. Apple biedt zelf geen bestandsopslag voor apps aan &mdash; kies waar je facturen en offertes bewaard moeten worden:</p>
-      <button id="pick-google" class="btn btn-primary btn-block">Gebruik Google Drive</button>
-      <button id="pick-microsoft" class="btn btn-secondary btn-block">Gebruik OneDrive</button>
-      <button id="pick-cancel" class="btn btn-ghost btn-block btn-sm">Terug</button>
     </div>
 
     <p id="login-error" class="error-text"></p>

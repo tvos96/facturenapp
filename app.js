@@ -6,8 +6,6 @@ import {
   MICROSOFT_CLIENT_ID,
   MICROSOFT_AUTHORITY,
   MICROSOFT_SCOPES,
-  APPLE_CLIENT_ID,
-  APPLE_REDIRECT_URI,
 } from "./config.js";
 
 // ==========================================================================
@@ -31,6 +29,7 @@ const DEFAULT_SETTINGS = {
   vatNumber: "",
   iban: "",
   logoDataUrl: "",
+  accentColor: "#1d4ed8",
   paymentTermDays: 14,
   nextFactuurNummer: 1,
   nextOfferteNummer: 1,
@@ -183,6 +182,33 @@ const googleProvider = {
     const created = await res.json();
     return created.id;
   },
+
+  // Slaat een binair bestand (bv. de gegenereerde PDF) op in dezelfde map.
+  async writeBinary(fileName, blob) {
+    const existing = await this.findByName(fileName, this.folderId);
+    if (existing) {
+      await this.request(`https://www.googleapis.com/upload/drive/v3/files/${existing.id}?uploadType=media`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/pdf" },
+        body: blob,
+      });
+      return existing.id;
+    }
+    const boundary = "-------facturenapp" + Date.now();
+    const metadata = { name: fileName, parents: [this.folderId] };
+    const head =
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+      `--${boundary}\r\nContent-Type: application/pdf\r\n\r\n`;
+    const tail = `\r\n--${boundary}--`;
+    const body = new Blob([head, blob, tail]);
+    const res = await this.request("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
+      method: "POST",
+      headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
+      body,
+    });
+    const created = await res.json();
+    return created.id;
+  },
 };
 
 // ==========================================================================
@@ -288,56 +314,19 @@ const microsoftProvider = {
     });
     return fileName; // OneDrive-bestanden zijn pad-gebaseerd, geen apart id nodig
   },
+
+  // Slaat een binair bestand (bv. de gegenereerde PDF) op in dezelfde app-map.
+  async writeBinary(fileName, blob) {
+    await this.graphRequest(`/me/drive/special/approot:/${encodeURIComponent(fileName)}:/content`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/pdf" },
+      body: blob,
+    });
+    return fileName;
+  },
 };
 
 const providers = { google: googleProvider, microsoft: microsoftProvider };
-
-// ==========================================================================
-// APPLE (alleen identiteit, geen opslag)
-// ==========================================================================
-function initApple() {
-  if (typeof AppleID === "undefined") return;
-  if (APPLE_CLIENT_ID.includes("VUL_HIER")) return;
-  try {
-    AppleID.auth.init({
-      clientId: APPLE_CLIENT_ID,
-      scope: "name email",
-      redirectURI: APPLE_REDIRECT_URI,
-      usePopup: true,
-    });
-  } catch (e) {
-    console.warn("Apple-configuratie kon niet worden geïnitialiseerd", e);
-  }
-}
-
-function decodeJWT(token) {
-  const payload = token.split(".")[1];
-  const json = decodeURIComponent(
-    atob(payload.replace(/-/g, "+").replace(/_/g, "/"))
-      .split("")
-      .map((c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0"))
-      .join("")
-  );
-  return JSON.parse(json);
-}
-
-async function appleSignIn() {
-  if (APPLE_CLIENT_ID.includes("VUL_HIER") || APPLE_REDIRECT_URI.includes("VUL_HIER")) {
-    throw new Error("Er is nog geen Apple Services ID ingevuld in config.js (vereist een betaald Apple Developer account). Zie README.md.");
-  }
-  if (typeof AppleID === "undefined") {
-    throw new Error("Apple-inlogbibliotheek kon niet geladen worden. Controleer je internetverbinding.");
-  }
-  const resp = await AppleID.auth.signIn();
-  const idToken = resp.authorization && resp.authorization.id_token;
-  if (!idToken) throw new Error("Geen identiteitsgegevens ontvangen van Apple.");
-  const claims = decodeJWT(idToken);
-  let name = "";
-  if (resp.user && resp.user.name) {
-    name = [resp.user.name.firstName, resp.user.name.lastName].filter(Boolean).join(" ");
-  }
-  return { email: claims.email || "", name };
-}
 
 // ==========================================================================
 // LOGIN WIRING
@@ -345,14 +334,6 @@ async function appleSignIn() {
 function setupLoginButtons() {
   document.getElementById("login-google").addEventListener("click", () => doProviderLogin("google"));
   document.getElementById("login-microsoft").addEventListener("click", () => doProviderLogin("microsoft"));
-  document.getElementById("login-apple").addEventListener("click", doAppleLogin);
-  document.getElementById("pick-google").addEventListener("click", () => doProviderLogin("google", true));
-  document.getElementById("pick-microsoft").addEventListener("click", () => doProviderLogin("microsoft", true));
-  document.getElementById("pick-cancel").addEventListener("click", () => {
-    document.getElementById("storage-picker").classList.add("hidden");
-    document.getElementById("login-buttons").classList.remove("hidden");
-    showLoginError("");
-  });
 
   document.getElementById("logout-btn").addEventListener("click", () => {
     const p = activeProvider();
@@ -362,7 +343,7 @@ function setupLoginButtons() {
   });
 }
 
-async function doProviderLogin(providerId, keepIdentityLabel = false) {
+async function doProviderLogin(providerId) {
   showLoginError("");
   const provider = providers[providerId];
   if (!provider) return;
@@ -371,7 +352,7 @@ async function doProviderLogin(providerId, keepIdentityLabel = false) {
     await provider.login();
     await provider.ensureStorage();
     state.activeProviderId = providerId;
-    if (!keepIdentityLabel) state.identity = { label: provider.name };
+    state.identity = { label: provider.name };
     sessionStorage.setItem("active_provider", providerId);
     setSyncStatus("");
     await afterLogin();
@@ -379,20 +360,6 @@ async function doProviderLogin(providerId, keepIdentityLabel = false) {
     console.error(err);
     setSyncStatus("");
     showLoginError("Inloggen mislukt: " + err.message);
-  }
-}
-
-async function doAppleLogin() {
-  showLoginError("");
-  try {
-    const identity = await appleSignIn();
-    state.identity = { label: identity.name || identity.email || "Apple-account" };
-    document.getElementById("apple-identity-label").textContent = state.identity.label;
-    document.getElementById("login-buttons").classList.add("hidden");
-    document.getElementById("storage-picker").classList.remove("hidden");
-  } catch (err) {
-    console.error(err);
-    showLoginError(err.message);
   }
 }
 
@@ -519,6 +486,13 @@ function fmtMoney(n) {
 function fmtDate(iso) {
   if (!iso) return "";
   return new Date(iso + "T00:00:00").toLocaleDateString("nl-NL");
+}
+
+function hexToRgb(hex) {
+  const clean = (hex || "#1d4ed8").replace("#", "");
+  const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
+  const num = parseInt(full, 16) || 0x1d4ed8;
+  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
 }
 
 function emptyDraft(type = "factuur") {
@@ -652,6 +626,32 @@ function renderNewView() {
   row2.appendChild(makeTextAreaField("Adres", draft.clientSnapshot.address, (v) => (draft.clientSnapshot.address = v)));
   row2.appendChild(makeTextField("Btw-nummer klant", draft.clientSnapshot.vatNumber, (v) => (draft.clientSnapshot.vatNumber = v)));
   card.appendChild(row2);
+
+  const saveClientBtn = document.createElement("button");
+  saveClientBtn.className = "btn btn-secondary btn-sm";
+  saveClientBtn.textContent = draft.clientId ? "Wijzigingen opslaan als klant" : "Opslaan als nieuwe klant";
+  saveClientBtn.addEventListener("click", async () => {
+    if (!draft.clientSnapshot.name.trim()) {
+      toast("Vul minimaal een klantnaam in.");
+      return;
+    }
+    try {
+      if (draft.clientId && state.clients.some((c) => c.id === draft.clientId)) {
+        const idx = state.clients.findIndex((c) => c.id === draft.clientId);
+        state.clients[idx] = { id: draft.clientId, ...draft.clientSnapshot };
+      } else {
+        const newClient = { id: crypto.randomUUID(), ...draft.clientSnapshot };
+        state.clients.push(newClient);
+        draft.clientId = newClient.id;
+      }
+      await saveClients();
+      toast("Klant \"" + draft.clientSnapshot.name + "\" opgeslagen.");
+      renderView();
+    } catch (err) {
+      toast("Opslaan mislukt: " + err.message);
+    }
+  });
+  card.appendChild(saveClientBtn);
 
   wrap.appendChild(card);
 
@@ -1099,6 +1099,28 @@ function renderArchiveList(list) {
       </div>
       <div class="amount">${fmtMoney(inv.total)}</div>
     `;
+    const statusSelect = document.createElement("select");
+    statusSelect.className = "status-select";
+    STATUS_OPTIONS[inv.type].forEach((s) => {
+      const o = document.createElement("option");
+      o.value = s;
+      o.textContent = STATUS_LABELS[s];
+      if (inv.status === s) o.selected = true;
+      statusSelect.appendChild(o);
+    });
+    statusSelect.addEventListener("change", async () => {
+      inv.status = statusSelect.value;
+      inv.updatedAt = new Date().toISOString();
+      try {
+        await saveInvoices();
+        toast("Status van " + inv.number + " gewijzigd naar " + STATUS_LABELS[inv.status] + ".");
+        renderArchiveList(list);
+      } catch (err) {
+        toast("Opslaan mislukt: " + err.message);
+      }
+    });
+    row.appendChild(statusSelect);
+
     const actions = document.createElement("div");
     actions.className = "actions";
 
@@ -1117,6 +1139,22 @@ function renderArchiveList(list) {
       renderView();
     });
     actions.appendChild(editBtn);
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn btn-danger btn-sm";
+    delBtn.textContent = "Verwijderen";
+    delBtn.addEventListener("click", async () => {
+      if (!confirm(`${inv.type === "factuur" ? "Factuur" : "Offerte"} ${inv.number} verwijderen? Dit kan niet ongedaan worden gemaakt.`)) return;
+      state.invoices = state.invoices.filter((i) => i.id !== inv.id);
+      try {
+        await saveInvoices();
+        toast(inv.number + " verwijderd.");
+        renderArchiveList(list);
+      } catch (err) {
+        toast("Verwijderen mislukt: " + err.message);
+      }
+    });
+    actions.appendChild(delBtn);
 
     row.appendChild(actions);
     list.appendChild(row);
@@ -1264,6 +1302,16 @@ function renderSettingsView() {
   logoField.appendChild(logoInput);
   card.appendChild(logoField);
 
+  const colorField = document.createElement("div");
+  colorField.className = "field color-field";
+  colorField.innerHTML = `<label>Accentkleur (gebruikt in de PDF-opmaak)</label>`;
+  const colorInput = document.createElement("input");
+  colorInput.type = "color";
+  colorInput.value = s.accentColor || "#1d4ed8";
+  colorInput.addEventListener("input", () => (s.accentColor = colorInput.value));
+  colorField.appendChild(colorInput);
+  card.appendChild(colorField);
+
   card.appendChild(makeTextField("Bedrijfsnaam", s.companyName, (v) => (s.companyName = v)));
   card.appendChild(makeTextAreaField("Adres", s.address, (v) => (s.address = v)));
   const row = document.createElement("div");
@@ -1339,19 +1387,27 @@ function resizeImageToDataUrl(file, maxWidth) {
 // ==========================================================================
 // PDF GENERATIE
 // ==========================================================================
-function generatePDF(inv) {
+async function generatePDF(inv) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const s = state.settings;
   const marginX = 40;
   let y = 50;
+  let logoBottom = y;
 
   if (s.logoDataUrl) {
     try {
       const props = doc.getImageProperties(s.logoDataUrl);
-      const w = 90;
-      const h = (props.height / props.width) * w;
+      const maxW = 130;
+      const maxH = 60;
+      let w = maxW;
+      let h = (props.height / props.width) * w;
+      if (h > maxH) {
+        h = maxH;
+        w = (props.width / props.height) * h;
+      }
       doc.addImage(s.logoDataUrl, "PNG", marginX, y, w, h);
+      logoBottom = y + h;
     } catch (e) {
       console.warn("Logo kon niet worden toegevoegd aan PDF", e);
     }
@@ -1361,8 +1417,11 @@ function generatePDF(inv) {
   doc.setTextColor(60);
   const companyLines = [s.companyName, s.address, s.vatNumber ? "Btw-nummer: " + s.vatNumber : "", s.iban ? "IBAN: " + s.iban : ""].filter(Boolean);
   doc.text(companyLines, 555, y, { align: "right" });
+  const companyBottom = y + companyLines.length * 12;
 
-  y += 70;
+  // Titel start pas onder het logo én het adresblok, ongeacht welke van de
+  // twee het hoogst is - zo kan een logo nooit meer over de titel heen vallen.
+  y = Math.max(logoBottom, companyBottom) + 30;
   doc.setFontSize(20);
   doc.setTextColor(20);
   doc.text(inv.type === "factuur" ? "FACTUUR" : "OFFERTE", marginX, y);
@@ -1413,7 +1472,7 @@ function generatePDF(inv) {
     body: rows,
     margin: { left: marginX, right: 40 },
     styles: { fontSize: 9.5, cellPadding: 6 },
-    headStyles: { fillColor: [29, 78, 216], textColor: 255 },
+    headStyles: { fillColor: hexToRgb(s.accentColor), textColor: 255 },
     columnStyles: {
       1: { halign: "right", cellWidth: 55 },
       2: { halign: "right", cellWidth: 75 },
@@ -1460,6 +1519,20 @@ function generatePDF(inv) {
   }
 
   doc.save(`${inv.number}.pdf`);
+
+  // Ook een kopie van de PDF opslaan in dezelfde cloudmap als de gegevens,
+  // zodat je 'm ook terugvindt naast settings.json/invoices.json. Dit mag
+  // de download zelf nooit blokkeren, dus alleen een toast bij mislukking.
+  const provider = activeProvider();
+  if (provider && provider.writeBinary) {
+    try {
+      const blob = doc.output("blob");
+      await provider.writeBinary(`${inv.number}.pdf`, blob);
+    } catch (err) {
+      console.warn("PDF uploaden naar cloudopslag mislukt", err);
+      toast("PDF is gedownload, maar kon niet naar " + provider.name + " worden geüpload: " + err.message);
+    }
+  }
 }
 
 // ==========================================================================
@@ -1477,11 +1550,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     microsoftProvider.init();
   } catch (e) {
     console.warn("Microsoft-configuratie kon niet worden geïnitialiseerd", e);
-  }
-  try {
-    initApple();
-  } catch (e) {
-    console.warn("Apple-configuratie kon niet worden geïnitialiseerd", e);
   }
 
   try {
