@@ -81,12 +81,12 @@ GitHub Pages-URL als de rest van de app.
    klant (of vul handmatig in), vul optioneel een referentie in en kies de
    taal van het document (Nederlands/Engels) en de valuta (staat standaard op
    de valuta uit Instellingen, maar is per factuur/offerte aan te passen).
-   Voeg regels toe met een omschrijving, optioneel een datum (vrij tekstveld,
-   bijvoorbeeld een periode als "11-06-2026 tot 20-06-2026"), aantal, eenheid
-   (kies uit Dagen/Kilometers/Eenheden/zelf in te vullen — een gekozen
-   standaardeenheid wordt automatisch vertaald als de documenttaal Engels is),
-   prijs en btw-percentage, en sla op. Nummering gebeurt automatisch maar is
-   altijd handmatig aan te passen.
+   Voeg regels toe met een omschrijving, optioneel een datum via de "Van" en
+   "Tot" kalenderkiezers (vul alleen "Van" in voor één losse datum, of ook
+   "Tot" voor een periode), aantal, eenheid (kies uit Dagen/Kilometers/
+   Eenheden/zelf in te vullen — een gekozen standaardeenheid wordt automatisch
+   vertaald als de documenttaal Engels is), prijs en btw-percentage, en sla
+   op. Nummering gebeurt automatisch maar is altijd handmatig aan te passen.
 5. Download de PDF direct na het aanmaken, of later via **Archief** — filter
    daar op type (factuur/offerte), status of zoek op klantnaam/nummer. In het
    Archief kun je per regel ook direct de status wijzigen of de factuur/

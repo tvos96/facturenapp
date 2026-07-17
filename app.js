@@ -88,6 +88,17 @@ function unitDisplayLabel(item, lang) {
   return item.unit || "";
 }
 
+// Zet de losse "van"/"tot" datumkiezers van een regel om naar één leesbare
+// tekst voor op de PDF: een periode als beide zijn ingevuld en verschillen,
+// anders gewoon de ene datum die er wél is.
+function itemDateLabel(item) {
+  if (!item.dateFrom && !item.dateTo) return "";
+  if (item.dateFrom && item.dateTo && item.dateTo !== item.dateFrom) {
+    return fmtDate(item.dateFrom) + " - " + fmtDate(item.dateTo);
+  }
+  return fmtDate(item.dateFrom || item.dateTo);
+}
+
 function activeProvider() {
   return providers[state.activeProviderId];
 }
@@ -438,11 +449,28 @@ async function afterLogin() {
   try {
     await loadAllData();
     setSyncStatus("");
+    updateTopbarLogo();
     renderView();
   } catch (err) {
     console.error(err);
     setSyncStatus("");
     toast("Fout bij laden van je opslag: " + err.message);
+  }
+}
+
+// Toont het eigen logo (ingesteld bij Instellingen) links van "Facturen App"
+// in de bovenbalk, zodra het bekend is. Vóór het inloggen/laden van de
+// instellingen is het logo nog niet bekend, dus blijft de balk gewoon leeg.
+function updateTopbarLogo() {
+  const img = document.getElementById("topbar-logo");
+  if (!img) return;
+  const url = state.settings && state.settings.logoDataUrl;
+  if (url) {
+    img.src = url;
+    img.classList.remove("hidden");
+  } else {
+    img.src = "";
+    img.classList.add("hidden");
   }
 }
 
@@ -600,7 +628,7 @@ function emptyDraft(type = "factuur") {
     dueDate: addDays(date, state.settings.paymentTermDays),
     clientId: null,
     clientSnapshot: { name: "", addressLine: "", postalCode: "", city: "", country: "", vatNumber: "", email: "" },
-    items: [{ date: "", desc: "", qty: 1, unit: "", unitKey: "", price: 0, vatRate: DEFAULT_VAT_RATES[0] }],
+    items: [{ dateFrom: "", dateTo: "", desc: "", qty: 1, unit: "", unitKey: "", price: 0, vatRate: DEFAULT_VAT_RATES[0] }],
     notes: defaultTemplate ? defaultTemplate[language] || "" : "",
   };
 }
@@ -890,7 +918,7 @@ function renderNewView() {
   addBtn.className = "btn btn-secondary btn-sm";
   addBtn.textContent = "+ Regel toevoegen";
   addBtn.addEventListener("click", () => {
-    draft.items.push({ date: "", desc: "", qty: 1, unit: "", unitKey: "", price: 0, vatRate: DEFAULT_VAT_RATES[0] });
+    draft.items.push({ dateFrom: "", dateTo: "", desc: "", qty: 1, unit: "", unitKey: "", price: 0, vatRate: DEFAULT_VAT_RATES[0] });
     renderView();
   });
   card3.appendChild(addBtn);
@@ -967,23 +995,37 @@ function renderItemsTable(draft) {
   const table = document.createElement("table");
   table.className = "items-table";
   table.innerHTML = `<thead><tr>
-    <th class="col-date">Datum</th><th>Omschrijving</th><th class="col-qty">Aantal</th><th class="col-unit">Eenheid</th><th class="col-price">Prijs</th>
+    <th class="col-date">Van</th><th class="col-date">Tot</th><th>Omschrijving</th><th class="col-qty">Aantal</th><th class="col-unit">Eenheid</th><th class="col-price">Prijs</th>
     <th class="col-vat">Btw</th><th class="col-total">Totaal</th><th class="col-remove"></th>
   </tr></thead>`;
   const tbody = document.createElement("tbody");
   draft.items.forEach((item, idx) => {
     const tr = document.createElement("tr");
 
-    const tdDate = document.createElement("td");
-    tdDate.dataset.label = "Datum (optioneel)";
-    tdDate.className = "col-date";
-    const dateInput = document.createElement("input");
-    dateInput.type = "text";
-    dateInput.value = item.date || "";
-    dateInput.placeholder = "bijv. 11-06-2026 of periode";
-    dateInput.addEventListener("input", () => (item.date = dateInput.value));
-    tdDate.appendChild(dateInput);
-    tr.appendChild(tdDate);
+    // Twee losse datumkiezers (kalender via de native date-input) i.p.v. één
+    // vrij tekstveld: "Tot" staat er expliciet naast zodat meteen zichtbaar
+    // is dat je een periode kunt opgeven. "Tot" laten staan = gewoon één
+    // losse datum.
+    const tdDateFrom = document.createElement("td");
+    tdDateFrom.dataset.label = "Van (optioneel)";
+    tdDateFrom.className = "col-date";
+    const dateFromInput = document.createElement("input");
+    dateFromInput.type = "date";
+    dateFromInput.value = item.dateFrom || "";
+    dateFromInput.addEventListener("input", () => (item.dateFrom = dateFromInput.value));
+    tdDateFrom.appendChild(dateFromInput);
+    tr.appendChild(tdDateFrom);
+
+    const tdDateTo = document.createElement("td");
+    tdDateTo.dataset.label = "Tot (optioneel, voor een periode)";
+    tdDateTo.className = "col-date";
+    const dateToInput = document.createElement("input");
+    dateToInput.type = "date";
+    dateToInput.value = item.dateTo || "";
+    dateToInput.title = "Optioneel: vul dit in als de regel over een periode gaat (van/tot)";
+    dateToInput.addEventListener("input", () => (item.dateTo = dateToInput.value));
+    tdDateTo.appendChild(dateToInput);
+    tr.appendChild(tdDateTo);
 
     const tdDesc = document.createElement("td");
     tdDesc.dataset.label = "Omschrijving";
@@ -1031,13 +1073,15 @@ function renderItemsTable(draft) {
     // (oude/eigen) tekst in item.unit staat, laat dat als "Zelf in te vullen"
     // zien zodat bestaande gegevens niet verloren gaan.
     const isKnownPreset = UNIT_PRESETS.some((u) => u.key === item.unitKey);
-    unitSelect.value = isKnownPreset ? item.unitKey : item.unit ? "custom" : "";
+    const isCustom = !isKnownPreset && !!item.unit;
+    unitSelect.value = isKnownPreset ? item.unitKey : isCustom ? "custom" : "";
     unitSelect.addEventListener("change", () => {
       const v = unitSelect.value;
       if (v === "custom") {
-        const text = prompt("Eigen eenheid:", !isKnownPreset ? item.unit || "" : "");
         item.unitKey = "custom";
-        item.unit = (text || "").trim();
+        // Tekst blijft leeg totdat de gebruiker hem hieronder intikt - geen
+        // prompt() meer, want dan was niet zichtbaar wat je had ingevuld.
+        if (isKnownPreset || !item.unit) item.unit = "";
       } else if (v === "") {
         item.unitKey = "";
         item.unit = "";
@@ -1049,6 +1093,18 @@ function renderItemsTable(draft) {
       renderView();
     });
     tdUnit.appendChild(unitSelect);
+
+    // Zodra "Zelf in te vullen" gekozen is, verschijnt hier gewoon een normaal
+    // tekstveld met de ingevulde tekst zichtbaar erin - i.p.v. een prompt().
+    if (unitSelect.value === "custom") {
+      const customUnitInput = document.createElement("input");
+      customUnitInput.type = "text";
+      customUnitInput.value = item.unit || "";
+      customUnitInput.placeholder = "eigen eenheid...";
+      customUnitInput.style.marginTop = "6px";
+      customUnitInput.addEventListener("input", () => (item.unit = customUnitInput.value));
+      tdUnit.appendChild(customUnitInput);
+    }
     tr.appendChild(tdUnit);
 
     const tdPrice = document.createElement("td");
@@ -1621,6 +1677,7 @@ function renderSettingsView() {
     const file = logoInput.files[0];
     if (!file) return;
     s.logoDataUrl = await resizeImageToDataUrl(file, 400);
+    updateTopbarLogo();
     renderView();
   });
   logoField.appendChild(logoInput);
@@ -1901,12 +1958,12 @@ async function generatePDF(inv) {
     }
   }
 
-  // Briefhoofd: bedrijfsnaam + adres blijven een rechts uitgelijnd blokje
-  // (klassieke briefhoofd-stijl, hangt aan de rechterkantlijn). De losse
-  // bedrijfsgegevens (btw/KvK/IBAN/bank/BIC/tel/e-mail) krijgen daaronder een
-  // vaste twee-koloms indeling, zodat de scheiding tussen elk "onderdeel" en
-  // de ingevulde waarde altijd op precies dezelfde plek staat - dat oogt
-  // veel netter dan los uitgelijnde regels met wisselende lengte.
+  // Rechterkolom: bedrijfsnaam + adres als rechts uitgelijnd blokje (klassieke
+  // briefhoofd-stijl, hangt aan de rechterkantlijn). De losse bedrijfsgegevens
+  // (btw/KvK/IBAN/bank/BIC/tel/e-mail) krijgen daaronder een vaste
+  // twee-koloms indeling: de labelkolom rechts uitgelijnd, direct tegen de
+  // waardekolom aan, zodat de scheiding tussen elk "onderdeel" en de
+  // ingevulde waarde altijd op precies dezelfde nette plek staat.
   doc.setFontSize(10);
   doc.setTextColor(60);
   const companyHeaderLines = [
@@ -1928,13 +1985,12 @@ async function generatePDF(inv) {
     s.email ? [t.email, s.email] : null,
   ].filter(Boolean);
   if (companyFieldPairs.length) {
-    const fieldLabelX = 330;
     const fieldValueX = 445;
     companyY += companyHeaderLines.length ? 8 : 0;
     doc.setFontSize(9);
     companyFieldPairs.forEach((pair) => {
       doc.setTextColor(120);
-      doc.text(pair[0], fieldLabelX, companyY);
+      doc.text(pair[0], fieldValueX - 6, companyY, { align: "right" });
       doc.setTextColor(50);
       doc.text(pair[1], fieldValueX, companyY);
       companyY += 13;
@@ -1942,19 +1998,22 @@ async function generatePDF(inv) {
   }
   const companyBottom = companyY;
 
-  // Titel start pas onder het logo én het bedrijfsgegevens-blok, ongeacht
-  // welke van de twee het hoogst is - zo kan een logo nooit meer over de
-  // titel heen vallen.
-  y = Math.max(logoBottom, companyBottom) + 30;
+  // Linkerkolom: titel + lijn komen direct onder het logo, náást het
+  // bedrijfsgegevens-blok (niet er meer onder) - zo hoeft de titel niet meer
+  // te wachten tot het (nu hogere, tweekoloms) bedrijfsgegevens-blok klaar
+  // is, en blijft er geen onnodige loze ruimte bovenin de pagina staan.
+  const leftColumnRight = 290;
+  let titleY = logoBottom + 26;
   doc.setFontSize(20);
   doc.setTextColor(20);
-  doc.text(t.title[inv.type], marginX, y);
-
-  y += 10;
+  doc.text(t.title[inv.type], marginX, titleY);
+  const lineY = titleY + 10;
   doc.setDrawColor(220);
-  doc.line(marginX, y, 555, y);
+  doc.line(marginX, lineY, leftColumnRight, lineY);
 
-  y += 28;
+  // Verder onder de langste van de twee kolommen (logo+titel+lijn vs.
+  // bedrijfsgegevens), zodat niets kan overlappen.
+  y = Math.max(lineY, companyBottom) + 28;
   doc.setFontSize(11);
   doc.setTextColor(40);
   doc.text(t.to, marginX, y);
@@ -2000,7 +2059,7 @@ async function generatePDF(inv) {
   y += Math.max(clientBlockHeight, metaBlockHeight, 70) + 14;
 
   const rows = inv.items.map((it) => [
-    it.date || "",
+    itemDateLabel(it),
     it.desc || "",
     String(it.qty) + (unitDisplayLabel(it, inv.language) ? " " + unitDisplayLabel(it, inv.language) : ""),
     fmtMoney(Number(it.price), inv.currency),
@@ -2016,7 +2075,7 @@ async function generatePDF(inv) {
     styles: { fontSize: 9.5, cellPadding: 6 },
     headStyles: { fillColor: hexToRgb(s.accentColor), textColor: 255 },
     columnStyles: {
-      0: { cellWidth: 70 },
+      0: { cellWidth: 85 },
       2: { halign: "right", cellWidth: 65 },
       3: { halign: "right", cellWidth: 75 },
       4: { halign: "right", cellWidth: 45 },
