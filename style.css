@@ -222,19 +222,35 @@ button, input, select, textarea {
 .badge-type-offerte { background: #fdf3e7; color: var(--amber); }
 
 /* ---------- Line items ---------- */
-.items-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+/* Op desktop mag de tabel breder zijn dan de kaart en horizontaal scrollen
+   i.p.v. dat elke kolom/invoerveld te smal en onhandig wordt. */
+.items-table-wrap { overflow-x: auto; margin-bottom: 8px; }
+.items-table { width: 100%; min-width: 680px; border-collapse: collapse; margin-bottom: 0; }
 .items-table th { text-align: left; font-size: 0.78rem; color: var(--text-muted); padding: 4px 6px; }
 .items-table td { padding: 4px 6px; vertical-align: top; }
 .items-table input, .items-table select { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
-.item-desc { min-width: 140px; }
+.item-desc { min-width: 160px; }
 .item-num { width: 100%; }
-.col-qty, .col-unit, .col-price, .col-vat { width: 90px; }
-.col-date { width: 128px; }
+.col-qty, .col-unit, .col-price, .col-vat { width: 92px; }
+.col-date { width: 118px; }
 .col-total { width: 100px; text-align: right; white-space: nowrap; font-weight: 600; }
 .col-remove { width: 36px; }
 .remove-line { background: none; border: none; color: var(--red); font-size: 1.2rem; cursor: pointer; padding: 4px; }
+.link-btn {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  color: var(--blue);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.link-btn:hover { text-decoration: underline; }
 
 @media (max-width: 700px) {
+  .items-table-wrap { overflow-x: visible; }
+  .items-table { min-width: 0; }
   .items-table thead { display: none; }
   .items-table, .items-table tbody, .items-table tr, .items-table td { display: block; width: 100%; }
   .items-table tr {

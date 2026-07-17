@@ -449,28 +449,11 @@ async function afterLogin() {
   try {
     await loadAllData();
     setSyncStatus("");
-    updateTopbarLogo();
     renderView();
   } catch (err) {
     console.error(err);
     setSyncStatus("");
     toast("Fout bij laden van je opslag: " + err.message);
-  }
-}
-
-// Toont het eigen logo (ingesteld bij Instellingen) links van "Facturen App"
-// in de bovenbalk, zodra het bekend is. Vóór het inloggen/laden van de
-// instellingen is het logo nog niet bekend, dus blijft de balk gewoon leeg.
-function updateTopbarLogo() {
-  const img = document.getElementById("topbar-logo");
-  if (!img) return;
-  const url = state.settings && state.settings.logoDataUrl;
-  if (url) {
-    img.src = url;
-    img.classList.remove("hidden");
-  } else {
-    img.src = "";
-    img.classList.add("hidden");
   }
 }
 
@@ -995,37 +978,56 @@ function renderItemsTable(draft) {
   const table = document.createElement("table");
   table.className = "items-table";
   table.innerHTML = `<thead><tr>
-    <th class="col-date">Van</th><th class="col-date">Tot</th><th>Omschrijving</th><th class="col-qty">Aantal</th><th class="col-unit">Eenheid</th><th class="col-price">Prijs</th>
+    <th class="col-date">Datum</th><th>Omschrijving</th><th class="col-qty">Aantal</th><th class="col-unit">Eenheid</th><th class="col-price">Prijs</th>
     <th class="col-vat">Btw</th><th class="col-total">Totaal</th><th class="col-remove"></th>
   </tr></thead>`;
   const tbody = document.createElement("tbody");
   draft.items.forEach((item, idx) => {
     const tr = document.createElement("tr");
 
-    // Twee losse datumkiezers (kalender via de native date-input) i.p.v. één
-    // vrij tekstveld: "Tot" staat er expliciet naast zodat meteen zichtbaar
-    // is dat je een periode kunt opgeven. "Tot" laten staan = gewoon één
-    // losse datum.
-    const tdDateFrom = document.createElement("td");
-    tdDateFrom.dataset.label = "Van (optioneel)";
-    tdDateFrom.className = "col-date";
+    // Eén datumkiezer (kalender via de native date-input), met een kleine
+    // "+ periode toevoegen"-link eronder die pas een tweede ("tot") kiezer
+    // toont zodra je die nodig hebt - dat houdt de tabel rustiger voor de
+    // meeste regels (die maar één datum of helemaal geen datum hebben) en is
+    // tegelijk duidelijk zichtbaar dat een periode mogelijk is.
+    const tdDate = document.createElement("td");
+    tdDate.dataset.label = "Datum (optioneel)";
+    tdDate.className = "col-date";
+
     const dateFromInput = document.createElement("input");
     dateFromInput.type = "date";
     dateFromInput.value = item.dateFrom || "";
     dateFromInput.addEventListener("input", () => (item.dateFrom = dateFromInput.value));
-    tdDateFrom.appendChild(dateFromInput);
-    tr.appendChild(tdDateFrom);
+    tdDate.appendChild(dateFromInput);
 
-    const tdDateTo = document.createElement("td");
-    tdDateTo.dataset.label = "Tot (optioneel, voor een periode)";
-    tdDateTo.className = "col-date";
+    const dateToWrap = document.createElement("div");
+    dateToWrap.style.marginTop = "4px";
     const dateToInput = document.createElement("input");
     dateToInput.type = "date";
     dateToInput.value = item.dateTo || "";
-    dateToInput.title = "Optioneel: vul dit in als de regel over een periode gaat (van/tot)";
+    dateToInput.title = "Tot (periode)";
     dateToInput.addEventListener("input", () => (item.dateTo = dateToInput.value));
-    tdDateTo.appendChild(dateToInput);
-    tr.appendChild(tdDateTo);
+    dateToWrap.appendChild(dateToInput);
+
+    const periodToggle = document.createElement("button");
+    periodToggle.type = "button";
+    periodToggle.className = "link-btn";
+    periodToggle.textContent = "+ periode (tot datum)";
+    periodToggle.addEventListener("click", () => {
+      dateToWrap.classList.remove("hidden");
+      periodToggle.classList.add("hidden");
+      dateToInput.focus();
+    });
+
+    if (item.dateTo) {
+      periodToggle.classList.add("hidden");
+    } else {
+      dateToWrap.classList.add("hidden");
+    }
+
+    tdDate.appendChild(periodToggle);
+    tdDate.appendChild(dateToWrap);
+    tr.appendChild(tdDate);
 
     const tdDesc = document.createElement("td");
     tdDesc.dataset.label = "Omschrijving";
@@ -1177,7 +1179,14 @@ function renderItemsTable(draft) {
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
-  return table;
+
+  // Scrollbare wrapper op desktop, zodat de tabel kolommen niet hoeft dicht
+  // te knijpen als het venster wat smaller is - mobiel (kaartweergave) blijft
+  // ongewijzigd, zie de @media (max-width:700px) regels in style.css.
+  const wrap = document.createElement("div");
+  wrap.className = "items-table-wrap";
+  wrap.appendChild(table);
+  return wrap;
 }
 
 function updateLineTotal(idx) {
@@ -1677,7 +1686,6 @@ function renderSettingsView() {
     const file = logoInput.files[0];
     if (!file) return;
     s.logoDataUrl = await resizeImageToDataUrl(file, 400);
-    updateTopbarLogo();
     renderView();
   });
   logoField.appendChild(logoInput);
@@ -1943,8 +1951,10 @@ async function generatePDF(inv) {
   if (s.logoDataUrl) {
     try {
       const props = doc.getImageProperties(s.logoDataUrl);
-      const maxW = 130;
-      const maxH = 60;
+      // Iets groter dan voorheen; de titel eronder verschuift automatisch mee
+      // (die is afhankelijk van logoBottom), dus dit kan nooit gaan overlappen.
+      const maxW = 165;
+      const maxH = 78;
       let w = maxW;
       let h = (props.height / props.width) * w;
       if (h > maxH) {
@@ -1958,13 +1968,20 @@ async function generatePDF(inv) {
     }
   }
 
+  // Eén gedeelde kolom-X voor ALLE label:waarde-blokken op deze pagina
+  // (bedrijfsgegevens hier, en de factuurgegevens verderop) - zo vormen ze
+  // samen visueel één nette, doorlopende kolom, met steeds dezelfde
+  // scheiding tussen "onderdeel" (label) en de ingevulde waarde. Ook dezelfde
+  // fontSize overal (9.5) voor adresgegevens, bedrijfsgegevens én
+  // factuurgegevens, zodat het er als één samenhangend geheel uitziet.
+  const infoFontSize = 9.5;
+  const infoValueX = 445;
+
   // Rechterkolom: bedrijfsnaam + adres als rechts uitgelijnd blokje (klassieke
   // briefhoofd-stijl, hangt aan de rechterkantlijn). De losse bedrijfsgegevens
-  // (btw/KvK/IBAN/bank/BIC/tel/e-mail) krijgen daaronder een vaste
-  // twee-koloms indeling: de labelkolom rechts uitgelijnd, direct tegen de
-  // waardekolom aan, zodat de scheiding tussen elk "onderdeel" en de
-  // ingevulde waarde altijd op precies dezelfde nette plek staat.
-  doc.setFontSize(10);
+  // (btw/KvK/IBAN/bank/BIC/tel/e-mail) krijgen daaronder dezelfde
+  // twee-koloms indeling als de factuurgegevens verderop.
+  doc.setFontSize(infoFontSize);
   doc.setTextColor(60);
   const companyHeaderLines = [
     s.companyName,
@@ -1973,7 +1990,7 @@ async function generatePDF(inv) {
     s.country,
   ].filter(Boolean);
   doc.text(companyHeaderLines, 555, y, { align: "right" });
-  let companyY = y + companyHeaderLines.length * 12;
+  let companyY = y + companyHeaderLines.length * 13;
 
   const companyFieldPairs = [
     s.vatNumber ? [t.vatNumber, s.vatNumber] : null,
@@ -1985,14 +2002,13 @@ async function generatePDF(inv) {
     s.email ? [t.email, s.email] : null,
   ].filter(Boolean);
   if (companyFieldPairs.length) {
-    const fieldValueX = 445;
     companyY += companyHeaderLines.length ? 8 : 0;
-    doc.setFontSize(9);
+    doc.setFontSize(infoFontSize);
     companyFieldPairs.forEach((pair) => {
       doc.setTextColor(120);
-      doc.text(pair[0], fieldValueX - 6, companyY, { align: "right" });
+      doc.text(pair[0], infoValueX - 6, companyY, { align: "right" });
       doc.setTextColor(50);
-      doc.text(pair[1], fieldValueX, companyY);
+      doc.text(pair[1], infoValueX, companyY);
       companyY += 13;
     });
   }
@@ -2017,7 +2033,7 @@ async function generatePDF(inv) {
   doc.setFontSize(11);
   doc.setTextColor(40);
   doc.text(t.to, marginX, y);
-  doc.setFontSize(10);
+  doc.setFontSize(infoFontSize);
   const clientAddressLines = [
     inv.clientSnapshot.addressLine,
     [inv.clientSnapshot.postalCode, inv.clientSnapshot.city].filter(Boolean).join(" "),
@@ -2031,14 +2047,13 @@ async function generatePDF(inv) {
   doc.text(clientLines, marginX, y + 16);
   const clientBlockHeight = 16 + clientLines.length * 13;
 
-  // Vaste kolommen voor het label en de waarde (net als bij de
-  // bedrijfsgegevens hierboven), en de waarde mag wrappen naar een volgende
-  // regel als hij niet past - zo krijgt bijvoorbeeld een lange referentie
-  // altijd genoeg ruimte i.p.v. krap tegen de kantlijn te komen.
-  const metaX = 350;
-  const metaValueX = metaX + 100;
-  const metaValueWidth = 555 - metaValueX;
-  doc.setFontSize(10);
+  // Zelfde twee-koloms indeling (en dezelfde infoValueX) als het
+  // bedrijfsgegevens-blok hierboven, zodat beide blokken één doorlopende
+  // kolom vormen. De waarde mag wrappen naar een volgende regel als hij niet
+  // past - zo krijgt bijvoorbeeld een lange referentie altijd genoeg ruimte
+  // i.p.v. krap tegen de kantlijn te komen.
+  const metaValueWidth = 555 - infoValueX;
+  doc.setFontSize(infoFontSize);
   const metaLines = [
     [t.number[inv.type], inv.number],
     [t.date, fmtDate(inv.date)],
@@ -2049,9 +2064,9 @@ async function generatePDF(inv) {
   metaLines.forEach((pair) => {
     const valueLines = doc.splitTextToSize(String(pair[1] ?? ""), metaValueWidth);
     doc.setTextColor(120);
-    doc.text(pair[0], metaX, metaY);
+    doc.text(pair[0], infoValueX - 6, metaY, { align: "right" });
     doc.setTextColor(20);
-    doc.text(valueLines, metaValueX, metaY);
+    doc.text(valueLines, infoValueX, metaY);
     metaY += Math.max(1, valueLines.length) * 16;
   });
   const metaBlockHeight = metaY - y;
