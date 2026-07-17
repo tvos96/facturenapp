@@ -23,7 +23,7 @@ export const DEFAULT_VAT_RATES = [21, 9, 0];
 // --------------------------------------------------------------------------
 // Vul hier je Azure "Application (client) ID" in. Zie README.md voor de
 // stap-voor-stap uitleg (gratis, Azure Portal - App registrations).
-export const MICROSOFT_CLIENT_ID = "VUL_HIER_JE_MICROSOFT_CLIENT_ID_IN";
+export const MICROSOFT_CLIENT_ID = "5f09388c-7728-49c4-8214-50ab592eb721";
 
 // "common" ondersteunt zowel persoonlijke Microsoft-accounts (Outlook.com,
 // Hotmail) als werk-/schoolaccounts (Microsoft 365 / Exchange).
