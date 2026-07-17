@@ -77,7 +77,7 @@ const STATUS_LABELS = {
 // vertaling: de ingevoerde tekst wordt letterlijk overgenomen, ongeacht de
 // documenttaal.
 const UNIT_PRESETS = [
-  { key: "dagen", nl: "dag", en: "day" },
+  { key: "dagen", nl: "Dag(en)", en: "Day(s)" },
   { key: "km", nl: "km", en: "km" },
   { key: "eenheden", nl: "eenheid", en: "unit" },
 ];
@@ -504,12 +504,21 @@ async function loadAllData() {
   state.invoices = invoicesRes.data || [];
   state.invoices.forEach((inv) => migrateLegacyAddress(inv.clientSnapshot));
   state.fileIds.invoices = invoicesRes.fileId;
+  // Basislijn voor de "ongeopslagen wijzigingen"-check in Instellingen.
+  state.settingsSavedSnapshot = JSON.stringify(state.settings);
 }
 
 async function saveSettings() {
   setSyncStatus("Opslaan...");
   state.fileIds.settings = await activeProvider().writeJSON("settings.json", state.fileIds.settings, state.settings);
+  state.settingsSavedSnapshot = JSON.stringify(state.settings);
   setSyncStatus("");
+}
+
+// Zijn er in Instellingen wijzigingen gemaakt die nog niet zijn opgeslagen?
+function hasUnsavedSettings() {
+  if (state.settingsSavedSnapshot === undefined) return false;
+  return JSON.stringify(state.settings) !== state.settingsSavedSnapshot;
 }
 
 async function saveClients() {
@@ -629,18 +638,113 @@ function toast(msg) {
 }
 
 // ==========================================================================
+// KLEINE GEDEELDE HELPERS
+// ==========================================================================
+
+// Vraagt een getal via prompt() en valideert het, i.p.v. dat een ongeldige
+// invoer (of een typfout) stilzwijgend NaN of 0 wordt. Geeft null terug bij
+// annuleren of ongeldige invoer (met een toast-uitleg in dat laatste geval) -
+// de aanroeper laat de bestaande waarde dan gewoon ongewijzigd.
+function promptNumber(message, currentValue, { min = -Infinity, max = Infinity } = {}) {
+  const input = prompt(message, currentValue);
+  if (input === null) return null; // geannuleerd
+  const n = Number(String(input).trim().replace(",", "."));
+  if (!Number.isFinite(n) || n < min || n > max) {
+    toast("Ongeldige invoer: vul een getal in" + (Number.isFinite(min) || Number.isFinite(max) ? ` tussen ${min} en ${max}` : "") + ".");
+    return null;
+  }
+  return n;
+}
+
+// Zelfde idee maar voor een 3-letterige ISO-valutacode.
+function promptCurrencyCode(currentValue) {
+  const input = prompt("ISO-valutacode (3 letters), bv. SEK, NOK, JPY:", currentValue);
+  if (input === null) return null;
+  const code = input.trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(code)) {
+    toast("Ongeldige valutacode: gebruik precies 3 letters, bv. SEK.");
+    return null;
+  }
+  return code;
+}
+
+// Zet een knop tijdelijk uit tijdens een async actie, zodat een dubbele klik
+// niet leidt tot dubbele cloud-writes of dubbele PDF-downloads.
+async function withBusy(btn, fn) {
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    await fn();
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Genereert unieke id's voor formuliervelden, zodat elk <label> een geldig
+// for-attribuut kan krijgen (nodig voor schermlezers).
+let fieldIdCounter = 0;
+function nextFieldId(prefix) {
+  fieldIdCounter += 1;
+  return `${prefix}-${fieldIdCounter}`;
+}
+
+// Maakt een modal-backdrop/modal-paar toegankelijk: dialog-semantiek,
+// focus op het eerste veld, en Escape sluit de modal (zonder de listener
+// te laten "hangen" nadat de modal via een andere weg is gesloten).
+// Geeft een `close()` functie terug die overal waar de modal normaal
+// gesproken sluit (Opslaan-knop, Annuleren-knop, klik buiten de modal)
+// aangeroepen moet worden in plaats van rechtstreeks `backdrop.remove()`.
+function attachModalA11y(backdrop, modal) {
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+
+  const previouslyFocused = document.activeElement;
+
+  function onKeydown(e) {
+    if (e.key === "Escape") close();
+  }
+  document.addEventListener("keydown", onKeydown);
+
+  function close() {
+    document.removeEventListener("keydown", onKeydown);
+    backdrop.remove();
+    if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+      previouslyFocused.focus();
+    }
+  }
+
+  setTimeout(() => {
+    const first = modal.querySelector("input, textarea, select, button");
+    if (first) first.focus();
+  }, 0);
+
+  return close;
+}
+
+// ==========================================================================
 // NAVIGATION
 // ==========================================================================
 function setupNav() {
   document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const view = btn.dataset.view;
+      if (view === state.view) return;
+      if (state.view === "settings" && hasUnsavedSettings()) {
+        const ok = confirm("Je hebt niet-opgeslagen wijzigingen in Instellingen. Toch weg navigeren en wijzigingen verliezen?");
+        if (!ok) return;
+      }
       if (view === "new" && (!state.draft || state.draft.__saved)) {
         state.draft = emptyDraft();
       }
       state.view = view;
       renderView();
     });
+  });
+  window.addEventListener("beforeunload", (e) => {
+    if (state.view === "settings" && hasUnsavedSettings()) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
   });
 }
 
@@ -673,6 +777,25 @@ function renderNewView() {
   title.textContent = draft.__editing ? "Bewerken" : "Nieuwe factuur / offerte";
   wrap.appendChild(title);
 
+  // Eerste-gebruik nudge: zonder bedrijfsnaam/adres mist de PDF de
+  // belangrijkste bedrijfsgegevens - wijs de gebruiker daar hier al op,
+  // i.p.v. dat dit pas opvalt bij het bekijken van de gedownloade PDF.
+  if (!state.settings.companyName || !state.settings.companyName.trim()) {
+    const notice = document.createElement("div");
+    notice.className = "notice-card";
+    notice.innerHTML = `Je hebt nog geen bedrijfsgegevens ingevuld. Vul deze eerst in bij <strong>Instellingen</strong>, anders ontbreken ze op je PDF.`;
+    const noticeBtn = document.createElement("button");
+    noticeBtn.className = "btn btn-secondary btn-sm";
+    noticeBtn.textContent = "Naar Instellingen";
+    noticeBtn.addEventListener("click", () => {
+      state.view = "settings";
+      renderView();
+    });
+    notice.appendChild(document.createElement("br"));
+    notice.appendChild(noticeBtn);
+    wrap.appendChild(notice);
+  }
+
   const typeToggle = document.createElement("div");
   typeToggle.className = "type-toggle";
   ["factuur", "offerte"].forEach((t) => {
@@ -695,8 +818,10 @@ function renderNewView() {
 
   const clientField = document.createElement("div");
   clientField.className = "field";
-  clientField.innerHTML = `<label>Klant</label>`;
+  const clientSelectId = nextFieldId("field");
+  clientField.innerHTML = `<label for="${clientSelectId}">Klant</label>`;
   const clientSelect = document.createElement("select");
+  clientSelect.id = clientSelectId;
   const optNone = document.createElement("option");
   optNone.value = "";
   optNone.textContent = "-- Kies een klant of vul handmatig in --";
@@ -753,27 +878,36 @@ function renderNewView() {
   const saveClientBtn = document.createElement("button");
   saveClientBtn.className = "btn btn-secondary btn-sm";
   saveClientBtn.textContent = draft.clientId ? "Wijzigingen opslaan als klant" : "Opslaan als nieuwe klant";
-  saveClientBtn.addEventListener("click", async () => {
-    if (!draft.clientSnapshot.name.trim()) {
-      toast("Vul minimaal een klantnaam in.");
-      return;
-    }
-    try {
-      if (draft.clientId && state.clients.some((c) => c.id === draft.clientId)) {
-        const idx = state.clients.findIndex((c) => c.id === draft.clientId);
-        state.clients[idx] = { id: draft.clientId, ...draft.clientSnapshot };
-      } else {
-        const newClient = { id: crypto.randomUUID(), ...draft.clientSnapshot };
-        state.clients.push(newClient);
-        draft.clientId = newClient.id;
+  saveClientBtn.addEventListener("click", () =>
+    withBusy(saveClientBtn, async () => {
+      if (!draft.clientSnapshot.name.trim()) {
+        toast("Vul minimaal een klantnaam in.");
+        return;
       }
-      await saveClients();
-      toast("Klant \"" + draft.clientSnapshot.name + "\" opgeslagen.");
-      renderView();
-    } catch (err) {
-      toast("Opslaan mislukt: " + err.message);
-    }
-  });
+      const nameTaken = state.clients.some(
+        (c) => c.id !== draft.clientId && c.name.trim().toLowerCase() === draft.clientSnapshot.name.trim().toLowerCase()
+      );
+      if (nameTaken) {
+        const ok = confirm(`Er bestaat al een klant met de naam "${draft.clientSnapshot.name}". Toch opslaan als (extra) nieuwe klant?`);
+        if (!ok) return;
+      }
+      try {
+        if (draft.clientId && state.clients.some((c) => c.id === draft.clientId)) {
+          const idx = state.clients.findIndex((c) => c.id === draft.clientId);
+          state.clients[idx] = { id: draft.clientId, ...draft.clientSnapshot };
+        } else {
+          const newClient = { id: crypto.randomUUID(), ...draft.clientSnapshot };
+          state.clients.push(newClient);
+          draft.clientId = newClient.id;
+        }
+        await saveClients();
+        toast("Klant \"" + draft.clientSnapshot.name + "\" opgeslagen.");
+        renderView();
+      } catch (err) {
+        toast("Opslaan mislukt: " + err.message);
+      }
+    })
+  );
   card.appendChild(saveClientBtn);
 
   wrap.appendChild(card);
@@ -791,7 +925,9 @@ function renderNewView() {
   row3.appendChild(
     makeDateField("Datum", draft.date, (v) => {
       draft.date = v;
-      draft.dueDate = addDays(v, draft.paymentTermDays);
+      if (!draft.__dueDateManuallyEdited) {
+        draft.dueDate = addDays(v, draft.paymentTermDays);
+      }
       renderView();
     })
   );
@@ -812,18 +948,24 @@ function renderNewView() {
       ],
       (v) => {
         if (v === "custom") {
-          const n = Number(prompt("Aantal dagen betalingstermijn:", draft.paymentTermDays) || draft.paymentTermDays);
+          const n = promptNumber("Aantal dagen betalingstermijn:", draft.paymentTermDays, { min: 0, max: 365 });
+          if (n === null) return;
           draft.paymentTermDays = n;
         } else {
           draft.paymentTermDays = Number(v);
         }
-        draft.dueDate = addDays(draft.date, draft.paymentTermDays);
+        if (!draft.__dueDateManuallyEdited) {
+          draft.dueDate = addDays(draft.date, draft.paymentTermDays);
+        }
         renderView();
       }
     )
   );
   row4.appendChild(
-    makeDateField(draft.type === "factuur" ? "Vervaldatum" : "Geldig tot", draft.dueDate, (v) => (draft.dueDate = v))
+    makeDateField(draft.type === "factuur" ? "Vervaldatum" : "Geldig tot", draft.dueDate, (v) => {
+      draft.dueDate = v;
+      draft.__dueDateManuallyEdited = true;
+    })
   );
   row4.appendChild(
     makeSelectField(
@@ -876,9 +1018,8 @@ function renderNewView() {
       ],
       (v) => {
         if (v === "custom") {
-          const code = (prompt("ISO-valutacode (3 letters), bv. SEK, NOK, JPY:", draft.currency || "EUR") || draft.currency || "EUR")
-            .toUpperCase()
-            .slice(0, 3);
+          const code = promptCurrencyCode(draft.currency || "EUR");
+          if (code === null) return;
           draft.currency = code;
         } else {
           draft.currency = v;
@@ -949,13 +1090,13 @@ function renderNewView() {
   const saveBtn = document.createElement("button");
   saveBtn.className = "btn btn-primary";
   saveBtn.textContent = draft.__editing ? "Wijzigingen opslaan" : "Opslaan in archief";
-  saveBtn.addEventListener("click", () => saveDraft(draft));
+  saveBtn.addEventListener("click", () => withBusy(saveBtn, () => saveDraft(draft)));
   actions.appendChild(saveBtn);
 
   const pdfBtn = document.createElement("button");
   pdfBtn.className = "btn btn-secondary";
   pdfBtn.textContent = "Download PDF";
-  pdfBtn.addEventListener("click", () => generatePDF(draft));
+  pdfBtn.addEventListener("click", () => withBusy(pdfBtn, () => generatePDF(draft)));
   actions.appendChild(pdfBtn);
 
   if (draft.__editing) {
@@ -1071,11 +1212,14 @@ function renderItemsTable(draft) {
       o.textContent = text;
       unitSelect.appendChild(o);
     });
-    // Een bekend preset -> die staat geselecteerd. Anders, als er toch al een
-    // (oude/eigen) tekst in item.unit staat, laat dat als "Zelf in te vullen"
-    // zien zodat bestaande gegevens niet verloren gaan.
+    // Een bekend preset -> die staat geselecteerd. "custom" moet expliciet uit
+    // item.unitKey blijven komen (niet afgeleid van of item.unit al tekst
+    // bevat) - anders klapt de keuze na elke render meteen terug naar "Geen"
+    // zodra het tekstveld nog leeg is, en lijkt de knop niet te werken.
+    // Voor oude data zonder unitKey: als er toch al eigen tekst in item.unit
+    // staat, ook als "Zelf in te vullen" tonen zodat niets verloren gaat.
     const isKnownPreset = UNIT_PRESETS.some((u) => u.key === item.unitKey);
-    const isCustom = !isKnownPreset && !!item.unit;
+    const isCustom = item.unitKey === "custom" || (!isKnownPreset && !!item.unit);
     unitSelect.value = isKnownPreset ? item.unitKey : isCustom ? "custom" : "";
     unitSelect.addEventListener("change", () => {
       const v = unitSelect.value;
@@ -1143,8 +1287,8 @@ function renderItemsTable(draft) {
     vatSelect.appendChild(customOpt);
     vatSelect.addEventListener("change", () => {
       if (vatSelect.value === "custom") {
-        const n = Number(prompt("Aangepast btw-percentage:", item.vatRate) ?? item.vatRate);
-        item.vatRate = n;
+        const n = promptNumber("Aangepast btw-percentage:", item.vatRate, { min: 0, max: 100 });
+        if (n !== null) item.vatRate = n;
         renderView();
       } else {
         item.vatRate = Number(vatSelect.value);
@@ -1211,10 +1355,13 @@ function updateLineTotal(idx) {
 function makeTextField(label, value, onChange, opts = {}) {
   const div = document.createElement("div");
   div.className = "field";
+  const id = nextFieldId("field");
   const l = document.createElement("label");
   l.textContent = label;
+  l.setAttribute("for", id);
   const input = document.createElement("input");
   input.type = "text";
+  input.id = id;
   input.value = value || "";
   if (opts.readOnly) input.readOnly = true;
   input.addEventListener("input", () => onChange(input.value));
@@ -1226,9 +1373,12 @@ function makeTextField(label, value, onChange, opts = {}) {
 function makeTextAreaField(label, value, onChange) {
   const div = document.createElement("div");
   div.className = "field";
+  const id = nextFieldId("field");
   const l = document.createElement("label");
   l.textContent = label;
+  l.setAttribute("for", id);
   const ta = document.createElement("textarea");
+  ta.id = id;
   ta.value = value || "";
   ta.addEventListener("input", () => onChange(ta.value));
   div.appendChild(l);
@@ -1239,10 +1389,13 @@ function makeTextAreaField(label, value, onChange) {
 function makeDateField(label, value, onChange) {
   const div = document.createElement("div");
   div.className = "field";
+  const id = nextFieldId("field");
   const l = document.createElement("label");
   l.textContent = label;
+  l.setAttribute("for", id);
   const input = document.createElement("input");
   input.type = "date";
+  input.id = id;
   input.value = value || "";
   input.addEventListener("change", () => onChange(input.value));
   div.appendChild(l);
@@ -1253,9 +1406,12 @@ function makeDateField(label, value, onChange) {
 function makeSelectField(label, value, options, onChange) {
   const div = document.createElement("div");
   div.className = "field";
+  const id = nextFieldId("field");
   const l = document.createElement("label");
   l.textContent = label;
+  l.setAttribute("for", id);
   const select = document.createElement("select");
+  select.id = id;
   options.forEach(([val, text]) => {
     const o = document.createElement("option");
     o.value = val;
@@ -1274,6 +1430,23 @@ async function saveDraft(draft) {
     toast("Vul minimaal een klantnaam in.");
     return;
   }
+
+  const duplicateNumber = state.invoices.some(
+    (i) => i.id !== draft.id && i.type === draft.type && i.number.trim().toLowerCase() === draft.number.trim().toLowerCase()
+  );
+  if (duplicateNumber) {
+    const ok = confirm(
+      `Er bestaat al ${draft.type === "factuur" ? "een factuur" : "een offerte"} met nummer "${draft.number}". Toch opslaan met dit nummer (dit geeft dubbele nummers in het archief)?`
+    );
+    if (!ok) return;
+  }
+
+  const hasEmptyRow = draft.items.some((it) => !it.desc || !it.desc.trim());
+  if (hasEmptyRow) {
+    const ok = confirm("Eén of meer regels hebben geen omschrijving. Toch opslaan?");
+    if (!ok) return;
+  }
+
   const existingIdx = state.invoices.findIndex((i) => i.id === draft.id);
   const totals = calcTotals(draft.items);
   const toSave = {
@@ -1285,6 +1458,7 @@ async function saveDraft(draft) {
   delete toSave.__editing;
   delete toSave.__saved;
   delete toSave.__numberManuallyEdited;
+  delete toSave.__dueDateManuallyEdited;
 
   bumpNumberCounterIfMatches(draft.type, draft.number);
 
@@ -1387,7 +1561,15 @@ function renderArchiveList(list) {
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
-    empty.textContent = "Geen facturen of offertes gevonden.";
+    if (!state.invoices.length) {
+      empty.textContent = "Nog geen facturen of offertes. Maak er een aan bij \"Nieuw\".";
+    } else {
+      const f = state.archiveFilter;
+      const filterActive = f.type !== "alle" || f.status !== "alle" || f.q.trim();
+      empty.textContent = filterActive
+        ? "Geen facturen of offertes gevonden voor dit filter/deze zoekopdracht."
+        : "Geen facturen of offertes gevonden.";
+    }
     list.appendChild(empty);
     return;
   }
@@ -1412,17 +1594,19 @@ function renderArchiveList(list) {
       if (inv.status === s) o.selected = true;
       statusSelect.appendChild(o);
     });
-    statusSelect.addEventListener("change", async () => {
-      inv.status = statusSelect.value;
-      inv.updatedAt = new Date().toISOString();
-      try {
-        await saveInvoices();
-        toast("Status van " + inv.number + " gewijzigd naar " + STATUS_LABELS[inv.status] + ".");
-        renderArchiveList(list);
-      } catch (err) {
-        toast("Opslaan mislukt: " + err.message);
-      }
-    });
+    statusSelect.addEventListener("change", () =>
+      withBusy(statusSelect, async () => {
+        inv.status = statusSelect.value;
+        inv.updatedAt = new Date().toISOString();
+        try {
+          await saveInvoices();
+          toast("Status van " + inv.number + " gewijzigd naar " + STATUS_LABELS[inv.status] + ".");
+          renderArchiveList(list);
+        } catch (err) {
+          toast("Opslaan mislukt: " + err.message);
+        }
+      })
+    );
     row.appendChild(statusSelect);
 
     const actions = document.createElement("div");
@@ -1431,7 +1615,7 @@ function renderArchiveList(list) {
     const pdfBtn = document.createElement("button");
     pdfBtn.className = "btn btn-secondary btn-sm";
     pdfBtn.textContent = "PDF";
-    pdfBtn.addEventListener("click", () => generatePDF(inv));
+    pdfBtn.addEventListener("click", () => withBusy(pdfBtn, () => generatePDF(inv)));
     actions.appendChild(pdfBtn);
 
     const editBtn = document.createElement("button");
@@ -1444,30 +1628,53 @@ function renderArchiveList(list) {
     });
     actions.appendChild(editBtn);
 
+    const dupBtn = document.createElement("button");
+    dupBtn.className = "btn btn-ghost btn-sm";
+    dupBtn.textContent = "Dupliceren";
+    dupBtn.addEventListener("click", () => {
+      const copy = JSON.parse(JSON.stringify(inv));
+      delete copy.__editing;
+      delete copy.__saved;
+      delete copy.createdAt;
+      delete copy.updatedAt;
+      copy.id = crypto.randomUUID();
+      copy.number = suggestNumber(copy.type);
+      copy.status = "concept";
+      copy.date = todayISO();
+      copy.dueDate = addDays(copy.date, copy.paymentTermDays);
+      state.draft = copy;
+      state.view = "new";
+      renderView();
+      toast("Kopie gemaakt van " + inv.number + " — controleer en sla op.");
+    });
+    actions.appendChild(dupBtn);
+
     const delBtn = document.createElement("button");
     delBtn.className = "btn btn-danger btn-sm";
     delBtn.textContent = "Verwijderen";
-    delBtn.addEventListener("click", async () => {
-      if (!confirm(`${inv.type === "factuur" ? "Factuur" : "Offerte"} ${inv.number} verwijderen? Dit kan niet ongedaan worden gemaakt.`)) return;
-      state.invoices = state.invoices.filter((i) => i.id !== inv.id);
-      try {
-        await saveInvoices();
-        toast(inv.number + " verwijderd.");
-        renderArchiveList(list);
-      } catch (err) {
-        toast("Verwijderen mislukt: " + err.message);
-        return;
-      }
-      const provider = activeProvider();
-      if (provider && provider.deleteFile) {
+    delBtn.addEventListener("click", () =>
+      withBusy(delBtn, async () => {
+        if (!confirm(`${inv.type === "factuur" ? "Factuur" : "Offerte"} ${inv.number} verwijderen? Dit kan niet ongedaan worden gemaakt.`)) return;
+        state.invoices = state.invoices.filter((i) => i.id !== inv.id);
         try {
-          await provider.deleteFile(`${inv.number}.pdf`);
+          await saveInvoices();
+          toast(inv.number + " verwijderd.");
+          renderArchiveList(list);
         } catch (err) {
-          console.warn("PDF verwijderen uit cloudopslag mislukt", err);
-          toast("Let op: de PDF van " + inv.number + " kon niet worden verwijderd uit " + provider.name + ".");
+          toast("Verwijderen mislukt: " + err.message);
+          return;
         }
-      }
-    });
+        const provider = activeProvider();
+        if (provider && provider.deleteFile) {
+          try {
+            await provider.deleteFile(`${inv.number}.pdf`);
+          } catch (err) {
+            console.warn("PDF verwijderen uit cloudopslag mislukt", err);
+            toast("Let op: de PDF van " + inv.number + " kon niet worden verwijderd uit " + provider.name + ".");
+          }
+        }
+      })
+    );
     actions.appendChild(delBtn);
 
     row.appendChild(actions);
@@ -1518,12 +1725,14 @@ function renderClientsView() {
     const delBtn = document.createElement("button");
     delBtn.className = "btn btn-danger btn-sm";
     delBtn.textContent = "Verwijderen";
-    delBtn.addEventListener("click", async () => {
-      if (!confirm(`Klant "${c.name}" verwijderen?`)) return;
-      state.clients = state.clients.filter((x) => x.id !== c.id);
-      await saveClients();
-      renderView();
-    });
+    delBtn.addEventListener("click", () =>
+      withBusy(delBtn, async () => {
+        if (!confirm(`Klant "${c.name}" verwijderen?`)) return;
+        state.clients = state.clients.filter((x) => x.id !== c.id);
+        await saveClients();
+        renderView();
+      })
+    );
     row.appendChild(delBtn);
 
     wrap.appendChild(row);
@@ -1543,6 +1752,7 @@ function openClientModal(client) {
   const modal = document.createElement("div");
   modal.className = "modal";
   modal.innerHTML = `<h2>${isNew ? "Nieuwe klant" : "Klant bewerken"}</h2>`;
+  const closeModal = attachModalA11y(backdrop, modal);
 
   modal.appendChild(makeTextField("Naam", draftClient.name, (v) => (draftClient.name = v)));
   modal.appendChild(makeTextField("Straat en huisnummer", draftClient.addressLine, (v) => (draftClient.addressLine = v)));
@@ -1560,30 +1770,39 @@ function openClientModal(client) {
   const saveBtn = document.createElement("button");
   saveBtn.className = "btn btn-primary";
   saveBtn.textContent = "Opslaan";
-  saveBtn.addEventListener("click", async () => {
-    if (!draftClient.name.trim()) {
-      toast("Vul een naam in.");
-      return;
-    }
-    const idx = state.clients.findIndex((c) => c.id === draftClient.id);
-    if (idx >= 0) state.clients[idx] = draftClient;
-    else state.clients.push(draftClient);
-    await saveClients();
-    backdrop.remove();
-    renderView();
-  });
+  saveBtn.addEventListener("click", () =>
+    withBusy(saveBtn, async () => {
+      if (!draftClient.name.trim()) {
+        toast("Vul een naam in.");
+        return;
+      }
+      const nameTaken = state.clients.some(
+        (c) => c.id !== draftClient.id && c.name.trim().toLowerCase() === draftClient.name.trim().toLowerCase()
+      );
+      if (nameTaken) {
+        const ok = confirm(`Er bestaat al een klant met de naam "${draftClient.name}". Toch opslaan?`);
+        if (!ok) return;
+      }
+      const idx = state.clients.findIndex((c) => c.id === draftClient.id);
+      if (idx >= 0) state.clients[idx] = draftClient;
+      else state.clients.push(draftClient);
+      await saveClients();
+      closeModal();
+      renderView();
+    })
+  );
   actions.appendChild(saveBtn);
 
   const cancelBtn = document.createElement("button");
   cancelBtn.className = "btn btn-ghost";
   cancelBtn.textContent = "Annuleren";
-  cancelBtn.addEventListener("click", () => backdrop.remove());
+  cancelBtn.addEventListener("click", () => closeModal());
   actions.appendChild(cancelBtn);
 
   modal.appendChild(actions);
   backdrop.appendChild(modal);
   backdrop.addEventListener("click", (e) => {
-    if (e.target === backdrop) backdrop.remove();
+    if (e.target === backdrop) closeModal();
   });
   document.body.appendChild(backdrop);
 }
@@ -1597,6 +1816,7 @@ function openNoteTemplateModal(template) {
   const modal = document.createElement("div");
   modal.className = "modal";
   modal.innerHTML = `<h2>${isNew ? "Nieuw notitiesjabloon" : "Sjabloon bewerken"}</h2>`;
+  const closeModal = attachModalA11y(backdrop, modal);
 
   modal.appendChild(makeTextField("Naam van het sjabloon", draftTpl.name, (v) => (draftTpl.name = v)));
   modal.appendChild(makeTextAreaField("Tekst (Nederlands)", draftTpl.nl, (v) => (draftTpl.nl = v)));
@@ -1621,36 +1841,38 @@ function openNoteTemplateModal(template) {
   const saveBtn = document.createElement("button");
   saveBtn.className = "btn btn-primary";
   saveBtn.textContent = "Opslaan";
-  saveBtn.addEventListener("click", async () => {
-    if (!draftTpl.name.trim()) {
-      toast("Vul een naam in voor het sjabloon.");
-      return;
-    }
-    if (!state.settings.noteTemplates) state.settings.noteTemplates = [];
-    const idx = state.settings.noteTemplates.findIndex((t) => t.id === draftTpl.id);
-    if (idx >= 0) state.settings.noteTemplates[idx] = draftTpl;
-    else state.settings.noteTemplates.push(draftTpl);
-    if (defaultCheckbox.checked) {
-      state.settings.defaultNoteTemplateId = draftTpl.id;
-    } else if (state.settings.defaultNoteTemplateId === draftTpl.id) {
-      state.settings.defaultNoteTemplateId = null;
-    }
-    await saveSettings();
-    backdrop.remove();
-    renderView();
-  });
+  saveBtn.addEventListener("click", () =>
+    withBusy(saveBtn, async () => {
+      if (!draftTpl.name.trim()) {
+        toast("Vul een naam in voor het sjabloon.");
+        return;
+      }
+      if (!state.settings.noteTemplates) state.settings.noteTemplates = [];
+      const idx = state.settings.noteTemplates.findIndex((t) => t.id === draftTpl.id);
+      if (idx >= 0) state.settings.noteTemplates[idx] = draftTpl;
+      else state.settings.noteTemplates.push(draftTpl);
+      if (defaultCheckbox.checked) {
+        state.settings.defaultNoteTemplateId = draftTpl.id;
+      } else if (state.settings.defaultNoteTemplateId === draftTpl.id) {
+        state.settings.defaultNoteTemplateId = null;
+      }
+      await saveSettings();
+      closeModal();
+      renderView();
+    })
+  );
   actions.appendChild(saveBtn);
 
   const cancelBtn = document.createElement("button");
   cancelBtn.className = "btn btn-ghost";
   cancelBtn.textContent = "Annuleren";
-  cancelBtn.addEventListener("click", () => backdrop.remove());
+  cancelBtn.addEventListener("click", () => closeModal());
   actions.appendChild(cancelBtn);
 
   modal.appendChild(actions);
   backdrop.appendChild(modal);
   backdrop.addEventListener("click", (e) => {
-    if (e.target === backdrop) backdrop.remove();
+    if (e.target === backdrop) closeModal();
   });
   document.body.appendChild(backdrop);
 }
@@ -1678,8 +1900,10 @@ function renderSettingsView() {
   }
   const logoField = document.createElement("div");
   logoField.className = "field";
-  logoField.innerHTML = `<label>Logo</label>`;
+  const logoInputId = nextFieldId("field");
+  logoField.innerHTML = `<label for="${logoInputId}">Logo</label>`;
   const logoInput = document.createElement("input");
+  logoInput.id = logoInputId;
   logoInput.type = "file";
   logoInput.accept = "image/*";
   logoInput.addEventListener("change", async () => {
@@ -1693,8 +1917,10 @@ function renderSettingsView() {
 
   const colorField = document.createElement("div");
   colorField.className = "field color-field";
-  colorField.innerHTML = `<label>Accentkleur (gebruikt in de PDF-opmaak)</label>`;
+  const colorInputId = nextFieldId("field");
+  colorField.innerHTML = `<label for="${colorInputId}">Accentkleur (gebruikt in de PDF-opmaak)</label>`;
   const colorInput = document.createElement("input");
+  colorInput.id = colorInputId;
   colorInput.type = "color";
   colorInput.value = s.accentColor || "#1d4ed8";
   colorInput.addEventListener("input", () => (s.accentColor = colorInput.value));
@@ -1753,10 +1979,8 @@ function renderSettingsView() {
       ],
       (v) => {
         if (v === "custom") {
-          const code = (prompt("ISO-valutacode (3 letters), bv. SEK, NOK, JPY:", s.currency || "EUR") || s.currency || "EUR")
-            .toUpperCase()
-            .slice(0, 3);
-          s.currency = code;
+          const code = promptCurrencyCode(s.currency || "EUR");
+          if (code !== null) s.currency = code;
         } else {
           s.currency = v;
         }
@@ -1771,14 +1995,14 @@ function renderSettingsView() {
   row2.appendChild(makeTextField("Volgend offertenummer", suggestNumber("offerte"), () => {}, { readOnly: true }));
   card2.appendChild(row2);
   const hint = document.createElement("p");
-  hint.style.cssText = "color:#667085;font-size:0.85rem;";
+  hint.style.cssText = "color:var(--text-muted);font-size:0.85rem;";
   hint.textContent = "Deze nummers worden automatisch opgehoogd zodra je een factuur/offerte met dat nummer opslaat. Je kunt het nummer bij het aanmaken altijd zelf aanpassen.";
   card2.appendChild(hint);
   wrap.appendChild(card2);
 
   const cardNotes = document.createElement("div");
   cardNotes.className = "card";
-  cardNotes.innerHTML = `<h2>Notitiesjablonen</h2><p style="color:#667085;font-size:0.85rem;margin-top:-8px;">Kant-en-klare teksten voor het notitieveld op een factuur/offerte, in het Nederlands en Engels. Het standaardsjabloon wordt automatisch ingevuld bij een nieuwe factuur/offerte, in de taal die je daarvoor kiest.</p>`;
+  cardNotes.innerHTML = `<h2>Notitiesjablonen</h2><p style="color:var(--text-muted);font-size:0.85rem;margin-top:-8px;">Kant-en-klare teksten voor het notitieveld op een factuur/offerte, in het Nederlands en Engels. Het standaardsjabloon wordt automatisch ingevuld bij een nieuwe factuur/offerte, in de taal die je daarvoor kiest.</p>`;
   const noteTemplates = s.noteTemplates || [];
   if (!noteTemplates.length) {
     const empty = document.createElement("div");
@@ -1801,12 +2025,14 @@ function renderSettingsView() {
         const defBtn = document.createElement("button");
         defBtn.className = "btn btn-ghost btn-sm";
         defBtn.textContent = "Als standaard instellen";
-        defBtn.addEventListener("click", async () => {
-          s.defaultNoteTemplateId = tpl.id;
-          await saveSettings();
-          toast("Standaardsjabloon ingesteld.");
-          renderView();
-        });
+        defBtn.addEventListener("click", () =>
+          withBusy(defBtn, async () => {
+            s.defaultNoteTemplateId = tpl.id;
+            await saveSettings();
+            toast("Standaardsjabloon ingesteld.");
+            renderView();
+          })
+        );
         row.appendChild(defBtn);
       }
       const editBtn = document.createElement("button");
@@ -1818,13 +2044,15 @@ function renderSettingsView() {
       const delBtn = document.createElement("button");
       delBtn.className = "btn btn-danger btn-sm";
       delBtn.textContent = "Verwijderen";
-      delBtn.addEventListener("click", async () => {
-        if (!confirm(`Sjabloon "${tpl.name}" verwijderen?`)) return;
-        s.noteTemplates = s.noteTemplates.filter((x) => x.id !== tpl.id);
-        if (s.defaultNoteTemplateId === tpl.id) s.defaultNoteTemplateId = null;
-        await saveSettings();
-        renderView();
-      });
+      delBtn.addEventListener("click", () =>
+        withBusy(delBtn, async () => {
+          if (!confirm(`Sjabloon "${tpl.name}" verwijderen?`)) return;
+          s.noteTemplates = s.noteTemplates.filter((x) => x.id !== tpl.id);
+          if (s.defaultNoteTemplateId === tpl.id) s.defaultNoteTemplateId = null;
+          await saveSettings();
+          renderView();
+        })
+      );
       row.appendChild(delBtn);
 
       cardNotes.appendChild(row);
@@ -1840,20 +2068,22 @@ function renderSettingsView() {
 
   const card3 = document.createElement("div");
   card3.className = "card";
-  card3.innerHTML = `<h2>Opslag</h2><p style="color:#667085;font-size:0.9rem;">Je bent ingelogd via <strong>${state.identity.label}</strong>. Facturen, offertes en klanten worden bewaard in jouw eigen account en zijn niet zichtbaar voor andere gebruikers van deze app.</p>`;
+  card3.innerHTML = `<h2>Opslag</h2><p style="color:var(--text-muted);font-size:0.9rem;">Je bent ingelogd via <strong>${state.identity.label}</strong>. Facturen, offertes en klanten worden bewaard in jouw eigen account en zijn niet zichtbaar voor andere gebruikers van deze app.</p>`;
   wrap.appendChild(card3);
 
   const saveBtn = document.createElement("button");
   saveBtn.className = "btn btn-primary";
   saveBtn.textContent = "Instellingen opslaan";
-  saveBtn.addEventListener("click", async () => {
-    try {
-      await saveSettings();
-      toast("Instellingen opgeslagen.");
-    } catch (err) {
-      toast("Opslaan mislukt: " + err.message);
-    }
-  });
+  saveBtn.addEventListener("click", () =>
+    withBusy(saveBtn, async () => {
+      try {
+        await saveSettings();
+        toast("Instellingen opgeslagen.");
+      } catch (err) {
+        toast("Opslaan mislukt: " + err.message);
+      }
+    })
+  );
   wrap.appendChild(saveBtn);
 
   return wrap;
@@ -1946,27 +2176,6 @@ async function generatePDF(inv) {
   const t = pdfT(inv.language);
   const marginX = 40;
   let y = 50;
-  let logoBottom = y;
-
-  if (s.logoDataUrl) {
-    try {
-      const props = doc.getImageProperties(s.logoDataUrl);
-      // Iets groter dan voorheen; de titel eronder verschuift automatisch mee
-      // (die is afhankelijk van logoBottom), dus dit kan nooit gaan overlappen.
-      const maxW = 165;
-      const maxH = 78;
-      let w = maxW;
-      let h = (props.height / props.width) * w;
-      if (h > maxH) {
-        h = maxH;
-        w = (props.width / props.height) * h;
-      }
-      doc.addImage(s.logoDataUrl, "PNG", marginX, y, w, h);
-      logoBottom = y + h;
-    } catch (e) {
-      console.warn("Logo kon niet worden toegevoegd aan PDF", e);
-    }
-  }
 
   // Eén gedeelde kolom-X voor ALLE label:waarde-blokken op deze pagina
   // (bedrijfsgegevens hier, en de factuurgegevens verderop) - zo vormen ze
@@ -1977,21 +2186,16 @@ async function generatePDF(inv) {
   const infoFontSize = 9.5;
   const infoValueX = 445;
 
-  // Rechterkolom: bedrijfsnaam + adres als rechts uitgelijnd blokje (klassieke
-  // briefhoofd-stijl, hangt aan de rechterkantlijn). De losse bedrijfsgegevens
-  // (btw/KvK/IBAN/bank/BIC/tel/e-mail) krijgen daaronder dezelfde
-  // twee-koloms indeling als de factuurgegevens verderop.
-  doc.setFontSize(infoFontSize);
-  doc.setTextColor(60);
+  // Bereken eerst hoe hoog het bedrijfsgegevens-blok (rechtsboven) wordt,
+  // vóórdat het logo getekend wordt: het logo schaalt mee tot ongeveer
+  // diezelfde hoogte, zodat er geen klein logootje met veel witruimte
+  // eronder ontstaat.
   const companyHeaderLines = [
     s.companyName,
     s.addressLine,
     [s.postalCode, s.city].filter(Boolean).join(" "),
     s.country,
   ].filter(Boolean);
-  doc.text(companyHeaderLines, 555, y, { align: "right" });
-  let companyY = y + companyHeaderLines.length * 13;
-
   const companyFieldPairs = [
     s.vatNumber ? [t.vatNumber, s.vatNumber] : null,
     s.kvkNumber ? [t.kvk, s.kvkNumber] : null,
@@ -2001,35 +2205,63 @@ async function generatePDF(inv) {
     s.phone ? [t.phone, s.phone] : null,
     s.email ? [t.email, s.email] : null,
   ].filter(Boolean);
+  let companyBlockHeight = companyHeaderLines.length * 13;
   if (companyFieldPairs.length) {
-    companyY += companyHeaderLines.length ? 8 : 0;
-    doc.setFontSize(infoFontSize);
+    companyBlockHeight += companyHeaderLines.length ? 8 : 0;
+    companyBlockHeight += companyFieldPairs.length * 13;
+  }
+  const companyBottom = y + companyBlockHeight;
+
+  let logoBottom = y;
+  if (s.logoDataUrl) {
+    try {
+      const props = doc.getImageProperties(s.logoDataUrl);
+      const minH = 46;
+      const maxH = 110;
+      const maxW = 210;
+      let h = Math.max(minH, Math.min(maxH, companyBlockHeight || minH));
+      let w = (props.width / props.height) * h;
+      if (w > maxW) {
+        w = maxW;
+        h = (props.height / props.width) * w;
+      }
+      doc.addImage(s.logoDataUrl, "PNG", marginX, y, w, h);
+      logoBottom = y + h;
+    } catch (e) {
+      console.warn("Logo kon niet worden toegevoegd aan PDF", e);
+    }
+  }
+
+  // Bedrijfsnaam + adres (links uitgelijnd op infoValueX) en de losse
+  // bedrijfsgegevens eronder, in dezelfde twee-koloms indeling als de
+  // factuurgegevens verderop.
+  doc.setFontSize(infoFontSize);
+  doc.setTextColor(60);
+  doc.text(companyHeaderLines, infoValueX, y);
+  if (companyFieldPairs.length) {
+    let fieldY = y + companyHeaderLines.length * 13 + (companyHeaderLines.length ? 8 : 0);
     companyFieldPairs.forEach((pair) => {
       doc.setTextColor(120);
-      doc.text(pair[0], infoValueX - 6, companyY, { align: "right" });
+      doc.text(pair[0], infoValueX - 6, fieldY, { align: "right" });
       doc.setTextColor(50);
-      doc.text(pair[1], infoValueX, companyY);
-      companyY += 13;
+      doc.text(pair[1], infoValueX, fieldY);
+      fieldY += 13;
     });
   }
-  const companyBottom = companyY;
 
-  // Linkerkolom: titel + lijn komen direct onder het logo, náást het
-  // bedrijfsgegevens-blok (niet er meer onder) - zo hoeft de titel niet meer
-  // te wachten tot het (nu hogere, tweekoloms) bedrijfsgegevens-blok klaar
-  // is, en blijft er geen onnodige loze ruimte bovenin de pagina staan.
-  const leftColumnRight = 290;
-  let titleY = logoBottom + 26;
+  // Titel + lijn komen nu ONDER zowel het logo als de eigen bedrijfsgegevens
+  // te staan (over de volle breedte) - dat maakt de knip tussen het
+  // briefhoofd en de rest van de factuur/offerte duidelijk zichtbaar.
+  // Daaronder komt pas de indeling "Aan:" (links) / factuurgegevens (rechts).
+  y = Math.max(logoBottom, companyBottom) + 26;
   doc.setFontSize(20);
   doc.setTextColor(20);
-  doc.text(t.title[inv.type], marginX, titleY);
-  const lineY = titleY + 10;
+  doc.text(t.title[inv.type], marginX, y);
+  y += 10;
   doc.setDrawColor(220);
-  doc.line(marginX, lineY, leftColumnRight, lineY);
+  doc.line(marginX, y, 555, y);
 
-  // Verder onder de langste van de twee kolommen (logo+titel+lijn vs.
-  // bedrijfsgegevens), zodat niets kan overlappen.
-  y = Math.max(lineY, companyBottom) + 28;
+  y += 28;
   doc.setFontSize(11);
   doc.setTextColor(40);
   doc.text(t.to, marginX, y);
@@ -2100,6 +2332,23 @@ async function generatePDF(inv) {
 
   let finalY = doc.lastAutoTable.finalY + 20;
   const totals = calcTotals(inv.items);
+
+  // Paginabreek-veiligheid: totalen/notities/betaalregel worden met plain
+  // doc.text() getekend (i.t.t. de regel-tabel hierboven, die autoTable's
+  // eigen paginering al afhandelt) - dus hier zelf controleren of het nog
+  // op de huidige pagina past, anders een nieuwe pagina beginnen.
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const bottomMargin = 50;
+  function ensureSpace(neededHeight) {
+    if (finalY + neededHeight > pageHeight - bottomMargin) {
+      doc.addPage();
+      finalY = 50;
+    }
+  }
+
+  const groupCount = Object.keys(totals.groups).length;
+  ensureSpace(16 * (1 + groupCount) + 56);
+
   const totalsX = 380;
   doc.setFontSize(10);
   doc.setTextColor(60);
@@ -2125,11 +2374,13 @@ async function generatePDF(inv) {
     doc.setFontSize(9.5);
     doc.setTextColor(90);
     const split = doc.splitTextToSize(inv.notes, 515);
+    ensureSpace(split.length * 12 + 10);
     doc.text(split, marginX, finalY);
     finalY += split.length * 12 + 10;
   }
 
   if (inv.type === "factuur" && s.iban) {
+    ensureSpace(20);
     doc.setFontSize(9.5);
     doc.setTextColor(90);
     doc.text(t.paymentNote(fmtDate(inv.dueDate), s.iban, inv.number), marginX, finalY);

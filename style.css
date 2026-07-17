@@ -165,6 +165,19 @@ button, input, select, textarea {
   margin-bottom: 18px;
 }
 .card h2 { margin: 0 0 14px; font-size: 1.08rem; font-family: var(--font-heading); font-weight: 600; letter-spacing: -0.01em; }
+
+/* Eerste-gebruik nudge / algemene inline melding boven een formulier. */
+.notice-card {
+  background: #fff8e6;
+  border: 1px solid #f4dfa3;
+  color: #7a5b00;
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.notice-card .btn { margin-top: 8px; }
 .section-title {
   font-family: var(--font-heading);
   font-size: 1.5rem;
@@ -235,7 +248,17 @@ button, input, select, textarea {
 .col-date { width: 118px; }
 .col-total { width: 100px; text-align: right; white-space: nowrap; font-weight: 600; }
 .col-remove { width: 36px; }
-.remove-line { background: none; border: none; color: var(--red); font-size: 1.2rem; cursor: pointer; padding: 4px; }
+.remove-line {
+  background: none;
+  border: none;
+  color: var(--red);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px;
+  min-width: 32px;
+  min-height: 32px;
+  line-height: 1;
+}
 .link-btn {
   background: none;
   border: none;
@@ -257,11 +280,19 @@ button, input, select, textarea {
     border: 1px solid var(--border);
     border-radius: 10px;
     margin-bottom: 10px;
-    padding: 10px;
+    padding: 10px 52px 10px 10px;
     position: relative;
   }
   .items-table td { padding: 4px 0; }
-  .items-table td.col-remove { position: absolute; top: 6px; right: 6px; width: auto; }
+  /* Groter, makkelijker te raken verwijderknopje op telefoon/tablet (min. 44x44
+     aanbevolen touch-target), met genoeg ruimte ernaast (padding-right op de
+     rij hierboven) zodat hij niet over de invoervelden heen valt. */
+  .items-table td.col-remove { position: absolute; top: 4px; right: 4px; width: auto; }
+  .items-table td.col-remove .remove-line {
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 1.5rem;
+  }
   .items-table td:before {
     content: attr(data-label);
     display: block;
