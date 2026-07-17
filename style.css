@@ -226,7 +226,7 @@ button, input, select, textarea {
 .items-table input, .items-table select { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
 .item-desc { min-width: 140px; }
 .item-num { width: 100%; }
-.col-qty, .col-unit, .col-price, .col-vat { width: 90px; }
+.col-date, .col-qty, .col-unit, .col-price, .col-vat { width: 90px; }
 .col-total { width: 100px; text-align: right; white-space: nowrap; font-weight: 600; }
 .col-remove { width: 36px; }
 .remove-line { background: none; border: none; color: var(--red); font-size: 1.2rem; cursor: pointer; padding: 4px; }

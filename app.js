@@ -25,7 +25,12 @@ const state = {
 
 const DEFAULT_SETTINGS = {
   companyName: "",
-  address: "",
+  // Adres als losse velden (internationaal bruikbare indeling: straat +
+  // huisnummer, postcode, plaats, land), i.p.v. één vrij tekstveld.
+  addressLine: "",
+  postalCode: "",
+  city: "",
+  country: "",
   vatNumber: "",
   kvkNumber: "",
   iban: "",
@@ -67,6 +72,21 @@ const STATUS_LABELS = {
   geaccepteerd: "Geaccepteerd",
   afgewezen: "Afgewezen",
 };
+
+// Vaste eenheid-opties per regel. "custom" (zelf in te vullen) heeft geen
+// vertaling: de ingevoerde tekst wordt letterlijk overgenomen, ongeacht de
+// documenttaal.
+const UNIT_PRESETS = [
+  { key: "dagen", nl: "dag", en: "day" },
+  { key: "km", nl: "km", en: "km" },
+  { key: "eenheden", nl: "eenheid", en: "unit" },
+];
+
+function unitDisplayLabel(item, lang) {
+  const preset = UNIT_PRESETS.find((u) => u.key === item.unitKey);
+  if (preset) return preset[lang] || preset.nl;
+  return item.unit || "";
+}
 
 function activeProvider() {
   return providers[state.activeProviderId];
@@ -430,6 +450,30 @@ function setSyncStatus(txt) {
   document.getElementById("sync-status").textContent = txt;
 }
 
+// Zet een oud, vrij ingevuld adres (meerdere regels tekst) om naar de
+// nieuwe losse velden. Best-effort: regel 1 = straat, regel 2 = "postcode
+// plaats", regel 3 = land. Wordt alleen gebruikt als de nieuwe velden nog
+// helemaal leeg zijn, zodat bestaande data (Instellingen, Klanten, oude
+// facturen/offertes) niet stilzwijgend hun adres kwijtraken.
+function migrateLegacyAddress(obj) {
+  if (!obj) return obj;
+  const hasNewFields = obj.addressLine || obj.postalCode || obj.city || obj.country;
+  if (hasNewFields || !obj.address) return obj;
+  const lines = String(obj.address).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  obj.addressLine = lines[0] || "";
+  if (lines[1]) {
+    const m = lines[1].match(/^([0-9]{3,5}\s?[A-Za-z]{0,3})\s+(.*)$/);
+    if (m) {
+      obj.postalCode = m[1].trim();
+      obj.city = m[2].trim();
+    } else {
+      obj.city = lines[1];
+    }
+  }
+  if (lines[2]) obj.country = lines[2];
+  return obj;
+}
+
 // ==========================================================================
 // STORE (settings / clients / invoices) - provider-onafhankelijk
 // ==========================================================================
@@ -441,10 +485,13 @@ async function loadAllData() {
     p.readJSON("invoices.json", []),
   ]);
   state.settings = { ...DEFAULT_SETTINGS, ...settingsRes.data };
+  migrateLegacyAddress(state.settings);
   state.fileIds.settings = settingsRes.fileId;
   state.clients = clientsRes.data || [];
+  state.clients.forEach(migrateLegacyAddress);
   state.fileIds.clients = clientsRes.fileId;
   state.invoices = invoicesRes.data || [];
+  state.invoices.forEach((inv) => migrateLegacyAddress(inv.clientSnapshot));
   state.fileIds.invoices = invoicesRes.fileId;
 }
 
@@ -552,8 +599,8 @@ function emptyDraft(type = "factuur") {
     paymentTermDays: state.settings.paymentTermDays,
     dueDate: addDays(date, state.settings.paymentTermDays),
     clientId: null,
-    clientSnapshot: { name: "", address: "", vatNumber: "", email: "" },
-    items: [{ desc: "", qty: 1, unit: "", price: 0, vatRate: DEFAULT_VAT_RATES[0] }],
+    clientSnapshot: { name: "", addressLine: "", postalCode: "", city: "", country: "", vatNumber: "", email: "" },
+    items: [{ date: "", desc: "", qty: 1, unit: "", unitKey: "", price: 0, vatRate: DEFAULT_VAT_RATES[0] }],
     notes: defaultTemplate ? defaultTemplate[language] || "" : "",
   };
 }
@@ -654,8 +701,16 @@ function renderNewView() {
     const c = state.clients.find((c) => c.id === clientSelect.value);
     draft.clientId = c ? c.id : null;
     draft.clientSnapshot = c
-      ? { name: c.name, address: c.address, vatNumber: c.vatNumber, email: c.email }
-      : { name: "", address: "", vatNumber: "", email: "" };
+      ? {
+          name: c.name,
+          addressLine: c.addressLine || "",
+          postalCode: c.postalCode || "",
+          city: c.city || "",
+          country: c.country || "",
+          vatNumber: c.vatNumber,
+          email: c.email,
+        }
+      : { name: "", addressLine: "", postalCode: "", city: "", country: "", vatNumber: "", email: "" };
     renderView();
   });
   clientField.appendChild(clientSelect);
@@ -669,9 +724,20 @@ function renderNewView() {
 
   const row2 = document.createElement("div");
   row2.className = "row";
-  row2.appendChild(makeTextAreaField("Adres", draft.clientSnapshot.address, (v) => (draft.clientSnapshot.address = v)));
+  row2.appendChild(
+    makeTextField("Straat en huisnummer", draft.clientSnapshot.addressLine, (v) => (draft.clientSnapshot.addressLine = v))
+  );
   row2.appendChild(makeTextField("Btw-nummer klant", draft.clientSnapshot.vatNumber, (v) => (draft.clientSnapshot.vatNumber = v)));
   card.appendChild(row2);
+
+  const row2b = document.createElement("div");
+  row2b.className = "row";
+  row2b.appendChild(
+    makeTextField("Postcode", draft.clientSnapshot.postalCode, (v) => (draft.clientSnapshot.postalCode = v))
+  );
+  row2b.appendChild(makeTextField("Plaats", draft.clientSnapshot.city, (v) => (draft.clientSnapshot.city = v)));
+  row2b.appendChild(makeTextField("Land", draft.clientSnapshot.country, (v) => (draft.clientSnapshot.country = v)));
+  card.appendChild(row2b);
 
   const saveClientBtn = document.createElement("button");
   saveClientBtn.className = "btn btn-secondary btn-sm";
@@ -824,7 +890,7 @@ function renderNewView() {
   addBtn.className = "btn btn-secondary btn-sm";
   addBtn.textContent = "+ Regel toevoegen";
   addBtn.addEventListener("click", () => {
-    draft.items.push({ desc: "", qty: 1, unit: "", price: 0, vatRate: DEFAULT_VAT_RATES[0] });
+    draft.items.push({ date: "", desc: "", qty: 1, unit: "", unitKey: "", price: 0, vatRate: DEFAULT_VAT_RATES[0] });
     renderView();
   });
   card3.appendChild(addBtn);
@@ -901,12 +967,23 @@ function renderItemsTable(draft) {
   const table = document.createElement("table");
   table.className = "items-table";
   table.innerHTML = `<thead><tr>
-    <th>Omschrijving</th><th class="col-qty">Aantal</th><th class="col-unit">Eenheid</th><th class="col-price">Prijs</th>
+    <th class="col-date">Datum</th><th>Omschrijving</th><th class="col-qty">Aantal</th><th class="col-unit">Eenheid</th><th class="col-price">Prijs</th>
     <th class="col-vat">Btw</th><th class="col-total">Totaal</th><th class="col-remove"></th>
   </tr></thead>`;
   const tbody = document.createElement("tbody");
   draft.items.forEach((item, idx) => {
     const tr = document.createElement("tr");
+
+    const tdDate = document.createElement("td");
+    tdDate.dataset.label = "Datum (optioneel)";
+    tdDate.className = "col-date";
+    const dateInput = document.createElement("input");
+    dateInput.type = "text";
+    dateInput.value = item.date || "";
+    dateInput.placeholder = "bijv. 11-06-2026 of periode";
+    dateInput.addEventListener("input", () => (item.date = dateInput.value));
+    tdDate.appendChild(dateInput);
+    tr.appendChild(tdDate);
 
     const tdDesc = document.createElement("td");
     tdDesc.dataset.label = "Omschrijving";
@@ -936,11 +1013,42 @@ function renderItemsTable(draft) {
     const tdUnit = document.createElement("td");
     tdUnit.dataset.label = "Eenheid";
     tdUnit.className = "col-unit";
-    const unitInput = document.createElement("input");
-    unitInput.value = item.unit || "";
-    unitInput.placeholder = "dag, uur, km, stuks...";
-    unitInput.addEventListener("input", () => (item.unit = unitInput.value));
-    tdUnit.appendChild(unitInput);
+    const unitSelect = document.createElement("select");
+    const unitOptions = [
+      ["", "Geen"],
+      ["dagen", "Dagen"],
+      ["km", "Kilometers"],
+      ["eenheden", "Eenheden"],
+      ["custom", "Zelf in te vullen..."],
+    ];
+    unitOptions.forEach(([val, text]) => {
+      const o = document.createElement("option");
+      o.value = val;
+      o.textContent = text;
+      unitSelect.appendChild(o);
+    });
+    // Een bekend preset -> die staat geselecteerd. Anders, als er toch al een
+    // (oude/eigen) tekst in item.unit staat, laat dat als "Zelf in te vullen"
+    // zien zodat bestaande gegevens niet verloren gaan.
+    const isKnownPreset = UNIT_PRESETS.some((u) => u.key === item.unitKey);
+    unitSelect.value = isKnownPreset ? item.unitKey : item.unit ? "custom" : "";
+    unitSelect.addEventListener("change", () => {
+      const v = unitSelect.value;
+      if (v === "custom") {
+        const text = prompt("Eigen eenheid:", !isKnownPreset ? item.unit || "" : "");
+        item.unitKey = "custom";
+        item.unit = (text || "").trim();
+      } else if (v === "") {
+        item.unitKey = "";
+        item.unit = "";
+      } else {
+        const preset = UNIT_PRESETS.find((u) => u.key === v);
+        item.unitKey = v;
+        item.unit = preset ? preset.nl : "";
+      }
+      renderView();
+    });
+    tdUnit.appendChild(unitSelect);
     tr.appendChild(tdUnit);
 
     const tdPrice = document.createElement("td");
@@ -1333,7 +1441,7 @@ function renderClientsView() {
     row.innerHTML = `
       <div class="col-main">
         <div class="name">${c.name}</div>
-        <div class="sub">${c.address || ""} ${c.vatNumber ? "· btw: " + c.vatNumber : ""}</div>
+        <div class="sub">${[c.addressLine, [c.postalCode, c.city].filter(Boolean).join(" "), c.country].filter(Boolean).join(", ")} ${c.vatNumber ? "· btw: " + c.vatNumber : ""}</div>
       </div>
     `;
     const editBtn = document.createElement("button");
@@ -1361,7 +1469,9 @@ function renderClientsView() {
 
 function openClientModal(client) {
   const isNew = !client;
-  const draftClient = client ? { ...client } : { id: crypto.randomUUID(), name: "", address: "", vatNumber: "", email: "" };
+  const draftClient = client
+    ? { ...client }
+    : { id: crypto.randomUUID(), name: "", addressLine: "", postalCode: "", city: "", country: "", vatNumber: "", email: "" };
 
   const backdrop = document.createElement("div");
   backdrop.className = "modal-backdrop";
@@ -1370,7 +1480,13 @@ function openClientModal(client) {
   modal.innerHTML = `<h2>${isNew ? "Nieuwe klant" : "Klant bewerken"}</h2>`;
 
   modal.appendChild(makeTextField("Naam", draftClient.name, (v) => (draftClient.name = v)));
-  modal.appendChild(makeTextAreaField("Adres", draftClient.address, (v) => (draftClient.address = v)));
+  modal.appendChild(makeTextField("Straat en huisnummer", draftClient.addressLine, (v) => (draftClient.addressLine = v)));
+  const clientAddrRow = document.createElement("div");
+  clientAddrRow.className = "row";
+  clientAddrRow.appendChild(makeTextField("Postcode", draftClient.postalCode, (v) => (draftClient.postalCode = v)));
+  clientAddrRow.appendChild(makeTextField("Plaats", draftClient.city, (v) => (draftClient.city = v)));
+  clientAddrRow.appendChild(makeTextField("Land", draftClient.country, (v) => (draftClient.country = v)));
+  modal.appendChild(clientAddrRow);
   modal.appendChild(makeTextField("Btw-nummer", draftClient.vatNumber, (v) => (draftClient.vatNumber = v)));
   modal.appendChild(makeTextField("E-mail", draftClient.email, (v) => (draftClient.email = v)));
 
@@ -1521,7 +1637,13 @@ function renderSettingsView() {
   card.appendChild(colorField);
 
   card.appendChild(makeTextField("Bedrijfsnaam", s.companyName, (v) => (s.companyName = v)));
-  card.appendChild(makeTextAreaField("Adres", s.address, (v) => (s.address = v)));
+  card.appendChild(makeTextField("Straat en huisnummer", s.addressLine, (v) => (s.addressLine = v)));
+  const rowAddr = document.createElement("div");
+  rowAddr.className = "row";
+  rowAddr.appendChild(makeTextField("Postcode", s.postalCode, (v) => (s.postalCode = v)));
+  rowAddr.appendChild(makeTextField("Plaats", s.city, (v) => (s.city = v)));
+  rowAddr.appendChild(makeTextField("Land", s.country, (v) => (s.country = v)));
+  card.appendChild(rowAddr);
   const row = document.createElement("div");
   row.className = "row";
   row.appendChild(makeTextField("Btw-nummer", s.vatNumber, (v) => (s.vatNumber = v)));
@@ -1710,6 +1832,7 @@ const PDF_I18N = {
     bic: "BIC:",
     phone: "Tel:",
     email: "E-mail:",
+    colDate: "Datum",
     colDesc: "Omschrijving",
     colQty: "Aantal",
     colPrice: "Prijs",
@@ -1734,6 +1857,7 @@ const PDF_I18N = {
     bic: "BIC:",
     phone: "Phone:",
     email: "Email:",
+    colDate: "Date",
     colDesc: "Description",
     colQty: "Quantity",
     colPrice: "Price",
@@ -1777,24 +1901,50 @@ async function generatePDF(inv) {
     }
   }
 
+  // Briefhoofd: bedrijfsnaam + adres blijven een rechts uitgelijnd blokje
+  // (klassieke briefhoofd-stijl, hangt aan de rechterkantlijn). De losse
+  // bedrijfsgegevens (btw/KvK/IBAN/bank/BIC/tel/e-mail) krijgen daaronder een
+  // vaste twee-koloms indeling, zodat de scheiding tussen elk "onderdeel" en
+  // de ingevulde waarde altijd op precies dezelfde plek staat - dat oogt
+  // veel netter dan los uitgelijnde regels met wisselende lengte.
   doc.setFontSize(10);
   doc.setTextColor(60);
-  const companyLines = [
+  const companyHeaderLines = [
     s.companyName,
-    s.address,
-    s.vatNumber ? t.vatNumber + " " + s.vatNumber : "",
-    s.kvkNumber ? t.kvk + " " + s.kvkNumber : "",
-    s.iban ? t.iban + " " + s.iban : "",
-    s.bankName ? t.bank + " " + s.bankName : "",
-    s.bic ? t.bic + " " + s.bic : "",
-    s.phone ? t.phone + " " + s.phone : "",
-    s.email ? t.email + " " + s.email : "",
+    s.addressLine,
+    [s.postalCode, s.city].filter(Boolean).join(" "),
+    s.country,
   ].filter(Boolean);
-  doc.text(companyLines, 555, y, { align: "right" });
-  const companyBottom = y + companyLines.length * 12;
+  doc.text(companyHeaderLines, 555, y, { align: "right" });
+  let companyY = y + companyHeaderLines.length * 12;
 
-  // Titel start pas onder het logo én het adresblok, ongeacht welke van de
-  // twee het hoogst is - zo kan een logo nooit meer over de titel heen vallen.
+  const companyFieldPairs = [
+    s.vatNumber ? [t.vatNumber, s.vatNumber] : null,
+    s.kvkNumber ? [t.kvk, s.kvkNumber] : null,
+    s.iban ? [t.iban, s.iban] : null,
+    s.bankName ? [t.bank, s.bankName] : null,
+    s.bic ? [t.bic, s.bic] : null,
+    s.phone ? [t.phone, s.phone] : null,
+    s.email ? [t.email, s.email] : null,
+  ].filter(Boolean);
+  if (companyFieldPairs.length) {
+    const fieldLabelX = 330;
+    const fieldValueX = 445;
+    companyY += companyHeaderLines.length ? 8 : 0;
+    doc.setFontSize(9);
+    companyFieldPairs.forEach((pair) => {
+      doc.setTextColor(120);
+      doc.text(pair[0], fieldLabelX, companyY);
+      doc.setTextColor(50);
+      doc.text(pair[1], fieldValueX, companyY);
+      companyY += 13;
+    });
+  }
+  const companyBottom = companyY;
+
+  // Titel start pas onder het logo én het bedrijfsgegevens-blok, ongeacht
+  // welke van de twee het hoogst is - zo kan een logo nooit meer over de
+  // titel heen vallen.
   y = Math.max(logoBottom, companyBottom) + 30;
   doc.setFontSize(20);
   doc.setTextColor(20);
@@ -1809,14 +1959,26 @@ async function generatePDF(inv) {
   doc.setTextColor(40);
   doc.text(t.to, marginX, y);
   doc.setFontSize(10);
+  const clientAddressLines = [
+    inv.clientSnapshot.addressLine,
+    [inv.clientSnapshot.postalCode, inv.clientSnapshot.city].filter(Boolean).join(" "),
+    inv.clientSnapshot.country,
+  ].filter(Boolean);
   const clientLines = [
     inv.clientSnapshot.name,
-    inv.clientSnapshot.address,
+    ...clientAddressLines,
     inv.clientSnapshot.vatNumber ? t.vatNumber + " " + inv.clientSnapshot.vatNumber : "",
   ].filter(Boolean);
   doc.text(clientLines, marginX, y + 16);
+  const clientBlockHeight = 16 + clientLines.length * 13;
 
+  // Vaste kolommen voor het label en de waarde (net als bij de
+  // bedrijfsgegevens hierboven), en de waarde mag wrappen naar een volgende
+  // regel als hij niet past - zo krijgt bijvoorbeeld een lange referentie
+  // altijd genoeg ruimte i.p.v. krap tegen de kantlijn te komen.
   const metaX = 350;
+  const metaValueX = metaX + 100;
+  const metaValueWidth = 555 - metaValueX;
   doc.setFontSize(10);
   const metaLines = [
     [t.number[inv.type], inv.number],
@@ -1824,18 +1986,23 @@ async function generatePDF(inv) {
     [t.dueDate[inv.type], fmtDate(inv.dueDate)],
   ];
   if (inv.reference) metaLines.push([t.reference, inv.reference]);
-  metaLines.forEach((pair, i) => {
+  let metaY = y;
+  metaLines.forEach((pair) => {
+    const valueLines = doc.splitTextToSize(String(pair[1] ?? ""), metaValueWidth);
     doc.setTextColor(120);
-    doc.text(pair[0], metaX, y + i * 16);
+    doc.text(pair[0], metaX, metaY);
     doc.setTextColor(20);
-    doc.text(pair[1], metaX + 100, y + i * 16);
+    doc.text(valueLines, metaValueX, metaY);
+    metaY += Math.max(1, valueLines.length) * 16;
   });
+  const metaBlockHeight = metaY - y;
 
-  y += 70 + (inv.reference ? 16 : 0);
+  y += Math.max(clientBlockHeight, metaBlockHeight, 70) + 14;
 
   const rows = inv.items.map((it) => [
+    it.date || "",
     it.desc || "",
-    String(it.qty) + (it.unit ? " " + it.unit : ""),
+    String(it.qty) + (unitDisplayLabel(it, inv.language) ? " " + unitDisplayLabel(it, inv.language) : ""),
     fmtMoney(Number(it.price), inv.currency),
     Number(it.vatRate) + "%",
     fmtMoney((Number(it.qty) || 0) * (Number(it.price) || 0), inv.currency),
@@ -1843,16 +2010,17 @@ async function generatePDF(inv) {
 
   doc.autoTable({
     startY: y,
-    head: [[t.colDesc, t.colQty, t.colPrice, t.colVat, t.colTotal]],
+    head: [[t.colDate, t.colDesc, t.colQty, t.colPrice, t.colVat, t.colTotal]],
     body: rows,
     margin: { left: marginX, right: 40 },
     styles: { fontSize: 9.5, cellPadding: 6 },
     headStyles: { fillColor: hexToRgb(s.accentColor), textColor: 255 },
     columnStyles: {
-      1: { halign: "right", cellWidth: 65 },
-      2: { halign: "right", cellWidth: 75 },
-      3: { halign: "right", cellWidth: 45 },
-      4: { halign: "right", cellWidth: 75 },
+      0: { cellWidth: 70 },
+      2: { halign: "right", cellWidth: 65 },
+      3: { halign: "right", cellWidth: 75 },
+      4: { halign: "right", cellWidth: 45 },
+      5: { halign: "right", cellWidth: 75 },
     },
   });
 

@@ -68,19 +68,25 @@ GitHub Pages-URL als de rest van de app.
 ## Gebruik
 
 1. Open de app en kies een inlogknop (Google of Microsoft).
-2. Vul eerst bij **Instellingen** je bedrijfsgegevens in (naam, adres,
-   btw-nummer, KvK-nummer, IBAN, banknaam, BIC/SWIFT, telefoonnummer, e-mail,
-   logo, accentkleur voor de PDF, standaard betalingstermijn en valuta). Hier
-   beheer je ook je **notitiesjablonen** (zie hieronder).
-3. Voeg eventueel klanten toe bij **Klanten** — of vul bij **Nieuw** de
-   klantgegevens direct in en klik op "Opslaan als nieuwe klant" om ze meteen
-   te bewaren voor volgende keren.
+2. Vul eerst bij **Instellingen** je bedrijfsgegevens in (naam, adres als
+   losse velden: straat + huisnummer, postcode, plaats, land — internationaal
+   bruikbaar, dus ook voor buitenlandse adressen —, btw-nummer, KvK-nummer,
+   IBAN, banknaam, BIC/SWIFT, telefoonnummer, e-mail, logo, accentkleur voor
+   de PDF, standaard betalingstermijn en valuta). Hier beheer je ook je
+   **notitiesjablonen** (zie hieronder).
+3. Voeg eventueel klanten toe bij **Klanten** (ook met adres als losse
+   velden) — of vul bij **Nieuw** de klantgegevens direct in en klik op
+   "Opslaan als nieuwe klant" om ze meteen te bewaren voor volgende keren.
 4. Maak een nieuwe factuur of offerte bij **Nieuw**: kies het type, kies een
    klant (of vul handmatig in), vul optioneel een referentie in en kies de
    taal van het document (Nederlands/Engels) en de valuta (staat standaard op
-   de valuta uit Instellingen, maar is per factuur/offerte aan te passen),
-   voeg regels toe (met aantal, eenheid, prijs en btw-percentage), en sla op.
-   Nummering gebeurt automatisch maar is altijd handmatig aan te passen.
+   de valuta uit Instellingen, maar is per factuur/offerte aan te passen).
+   Voeg regels toe met een omschrijving, optioneel een datum (vrij tekstveld,
+   bijvoorbeeld een periode als "11-06-2026 tot 20-06-2026"), aantal, eenheid
+   (kies uit Dagen/Kilometers/Eenheden/zelf in te vullen — een gekozen
+   standaardeenheid wordt automatisch vertaald als de documenttaal Engels is),
+   prijs en btw-percentage, en sla op. Nummering gebeurt automatisch maar is
+   altijd handmatig aan te passen.
 5. Download de PDF direct na het aanmaken, of later via **Archief** — filter
    daar op type (factuur/offerte), status of zoek op klantnaam/nummer. In het
    Archief kun je per regel ook direct de status wijzigen of de factuur/
