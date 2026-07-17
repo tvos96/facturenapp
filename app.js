@@ -209,6 +209,13 @@ const googleProvider = {
     const created = await res.json();
     return created.id;
   },
+
+  // Verwijdert een bestand (bv. een PDF) uit de app-map, als het bestaat.
+  async deleteFile(fileName) {
+    const file = await this.findByName(fileName, this.folderId);
+    if (!file) return;
+    await this.request(`https://www.googleapis.com/drive/v3/files/${file.id}`, { method: "DELETE" });
+  },
 };
 
 // ==========================================================================
@@ -323,6 +330,11 @@ const microsoftProvider = {
       body: blob,
     });
     return fileName;
+  },
+
+  // Verwijdert een bestand (bv. een PDF) uit de app-map, als het bestaat.
+  async deleteFile(fileName) {
+    await this.graphRequest(`/me/drive/special/approot:/${encodeURIComponent(fileName)}:`, { method: "DELETE" }, true);
   },
 };
 
@@ -1152,6 +1164,16 @@ function renderArchiveList(list) {
         renderArchiveList(list);
       } catch (err) {
         toast("Verwijderen mislukt: " + err.message);
+        return;
+      }
+      const provider = activeProvider();
+      if (provider && provider.deleteFile) {
+        try {
+          await provider.deleteFile(`${inv.number}.pdf`);
+        } catch (err) {
+          console.warn("PDF verwijderen uit cloudopslag mislukt", err);
+          toast("Let op: de PDF van " + inv.number + " kon niet worden verwijderd uit " + provider.name + ".");
+        }
       }
     });
     actions.appendChild(delBtn);
