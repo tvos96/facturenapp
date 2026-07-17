@@ -1,20 +1,28 @@
-import { GOOGLE_CLIENT_ID, DRIVE_SCOPE, APP_FOLDER_NAME, DEFAULT_VAT_RATES } from "./config.js";
+import {
+  GOOGLE_CLIENT_ID,
+  DRIVE_SCOPE,
+  APP_FOLDER_NAME,
+  DEFAULT_VAT_RATES,
+  MICROSOFT_CLIENT_ID,
+  MICROSOFT_AUTHORITY,
+  MICROSOFT_SCOPES,
+  APPLE_CLIENT_ID,
+  APPLE_REDIRECT_URI,
+} from "./config.js";
 
 // ==========================================================================
 // STATE
 // ==========================================================================
 const state = {
-  token: null,
-  tokenExpiresAt: 0,
-  folderId: null,
+  activeProviderId: null, // 'google' | 'microsoft'
+  identity: { label: "" }, // label getoond rechtsboven in de app
   fileIds: { settings: null, clients: null, invoices: null },
   settings: null,
   clients: [],
   invoices: [],
   view: "new",
-  draft: null,          // huidige factuur/offerte in bewerking
+  draft: null,
   archiveFilter: { type: "alle", status: "alle", q: "" },
-  saving: false,
 };
 
 const DEFAULT_SETTINGS = {
@@ -42,59 +50,349 @@ const STATUS_LABELS = {
   afgewezen: "Afgewezen",
 };
 
-// ==========================================================================
-// GOOGLE AUTH
-// ==========================================================================
-let tokenClient = null;
+function activeProvider() {
+  return providers[state.activeProviderId];
+}
 
-function initAuth() {
-  if (typeof google === "undefined" || !google.accounts) {
-    showLoginError("Kon Google Identity Services niet laden. Controleer je internetverbinding en herlaad de pagina.");
-    document.getElementById("login-btn").disabled = true;
-    return;
-  }
-  tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: GOOGLE_CLIENT_ID,
-    scope: DRIVE_SCOPE,
-    callback: async (resp) => {
-      if (resp.error) {
-        showLoginError("Inloggen mislukt: " + resp.error);
+// ==========================================================================
+// PROVIDER: GOOGLE DRIVE
+// ==========================================================================
+const googleProvider = {
+  id: "google",
+  name: "Google Drive",
+  token: null,
+  tokenClient: null,
+  folderId: null,
+
+  init() {
+    if (typeof google === "undefined" || !google.accounts) return;
+    this.tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope: DRIVE_SCOPE,
+      callback: () => {}, // wordt per login-poging overschreven
+    });
+  },
+
+  login() {
+    return new Promise((resolve, reject) => {
+      if (GOOGLE_CLIENT_ID.includes("VUL_HIER")) {
+        reject(new Error("Er is nog geen Google Client ID ingevuld in config.js. Zie README.md."));
         return;
       }
-      state.token = resp.access_token;
-      state.tokenExpiresAt = Date.now() + (resp.expires_in - 60) * 1000;
-      sessionStorage.setItem("gd_token", state.token);
-      sessionStorage.setItem("gd_token_exp", String(state.tokenExpiresAt));
-      await afterLogin();
-    },
-  });
+      if (!this.tokenClient) {
+        reject(new Error("Google Identity Services kon niet geladen worden. Controleer je internetverbinding."));
+        return;
+      }
+      this.tokenClient.callback = (resp) => {
+        if (resp.error) {
+          reject(new Error(resp.error));
+          return;
+        }
+        this.token = resp.access_token;
+        sessionStorage.setItem("google_token", this.token);
+        sessionStorage.setItem("google_token_exp", String(Date.now() + (resp.expires_in - 60) * 1000));
+        resolve();
+      };
+      this.tokenClient.requestAccessToken({ prompt: "" });
+    });
+  },
 
-  document.getElementById("login-btn").addEventListener("click", () => {
-    showLoginError("");
-    if (GOOGLE_CLIENT_ID.includes("VUL_HIER")) {
-      showLoginError("Er is nog geen Google Client ID ingevuld in config.js. Zie README.md.");
-      return;
+  async restoreSession() {
+    const savedToken = sessionStorage.getItem("google_token");
+    const savedExp = Number(sessionStorage.getItem("google_token_exp") || 0);
+    if (savedToken && savedExp > Date.now()) {
+      this.token = savedToken;
+      this.folderId = sessionStorage.getItem("google_folder_id") || null;
+      return true;
     }
-    tokenClient.requestAccessToken({ prompt: "" });
+    return false;
+  },
+
+  logout() {
+    if (this.token && typeof google !== "undefined") {
+      google.accounts.oauth2.revoke(this.token, () => {});
+    }
+    this.token = null;
+    sessionStorage.removeItem("google_token");
+    sessionStorage.removeItem("google_token_exp");
+    sessionStorage.removeItem("google_folder_id");
+  },
+
+  async request(url, options = {}) {
+    const res = await fetch(url, {
+      ...options,
+      headers: { Authorization: "Bearer " + this.token, ...(options.headers || {}) },
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Google Drive fout (${res.status}): ${text.slice(0, 200)}`);
+    }
+    return res;
+  },
+
+  async findByName(name, parentId) {
+    const q = encodeURIComponent(
+      `name='${name.replace(/'/g, "\\'")}' and trashed=false` + (parentId ? ` and '${parentId}' in parents` : "")
+    );
+    const res = await this.request(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&spaces=drive`);
+    const data = await res.json();
+    return data.files && data.files.length ? data.files[0] : null;
+  },
+
+  async ensureStorage() {
+    let folder = await this.findByName(APP_FOLDER_NAME, null);
+    if (!folder) {
+      const res = await this.request("https://www.googleapis.com/drive/v3/files", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: APP_FOLDER_NAME, mimeType: "application/vnd.google-apps.folder" }),
+      });
+      folder = await res.json();
+    }
+    this.folderId = folder.id;
+    sessionStorage.setItem("google_folder_id", folder.id);
+  },
+
+  async readJSON(fileName, fallback) {
+    const file = await this.findByName(fileName, this.folderId);
+    if (!file) return { fileId: null, data: fallback };
+    const res = await this.request(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`);
+    return { fileId: file.id, data: await res.json() };
+  },
+
+  async writeJSON(fileName, fileId, data) {
+    const content = JSON.stringify(data, null, 2);
+    if (fileId) {
+      await this.request(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: content,
+      });
+      return fileId;
+    }
+    const boundary = "-------facturenapp" + Date.now();
+    const metadata = { name: fileName, parents: [this.folderId] };
+    const body =
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+      `--${boundary}\r\nContent-Type: application/json\r\n\r\n${content}\r\n--${boundary}--`;
+    const res = await this.request("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
+      method: "POST",
+      headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
+      body,
+    });
+    const created = await res.json();
+    return created.id;
+  },
+};
+
+// ==========================================================================
+// PROVIDER: MICROSOFT ONEDRIVE (Outlook / Exchange / Microsoft 365)
+// ==========================================================================
+let msalInstance = null;
+
+const microsoftProvider = {
+  id: "microsoft",
+  name: "OneDrive",
+  token: null,
+  account: null,
+
+  init() {
+    if (typeof msal === "undefined") return;
+    if (MICROSOFT_CLIENT_ID.includes("VUL_HIER")) return; // nog niet geconfigureerd, sla stil over
+    try {
+      msalInstance = new msal.PublicClientApplication({
+        auth: {
+          clientId: MICROSOFT_CLIENT_ID,
+          authority: MICROSOFT_AUTHORITY,
+          redirectUri: window.location.origin + window.location.pathname,
+        },
+        cache: { cacheLocation: "sessionStorage" },
+      });
+    } catch (e) {
+      console.warn("Microsoft-configuratie kon niet worden geïnitialiseerd", e);
+    }
+  },
+
+  async login() {
+    if (MICROSOFT_CLIENT_ID.includes("VUL_HIER")) {
+      throw new Error("Er is nog geen Microsoft Client ID ingevuld in config.js. Zie README.md.");
+    }
+    if (!msalInstance) {
+      throw new Error("Microsoft-inlogbibliotheek kon niet geladen worden. Controleer je internetverbinding.");
+    }
+    const resp = await msalInstance.loginPopup({ scopes: MICROSOFT_SCOPES });
+    this.account = resp.account;
+    await this.acquireToken();
+  },
+
+  async acquireToken() {
+    try {
+      const resp = await msalInstance.acquireTokenSilent({ scopes: MICROSOFT_SCOPES, account: this.account });
+      this.token = resp.accessToken;
+    } catch (e) {
+      const resp = await msalInstance.acquireTokenPopup({ scopes: MICROSOFT_SCOPES, account: this.account });
+      this.token = resp.accessToken;
+    }
+  },
+
+  async restoreSession() {
+    if (!msalInstance) return false;
+    const accounts = msalInstance.getAllAccounts();
+    if (!accounts.length) return false;
+    this.account = accounts[0];
+    try {
+      await this.acquireToken();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  },
+
+  logout() {
+    this.token = null;
+    if (msalInstance && this.account) {
+      msalInstance.logoutPopup({ account: this.account }).catch(() => {});
+    }
+  },
+
+  // approot = speciale, verborgen "Apps"-map per gebruiker; wordt door
+  // Microsoft automatisch aangemaakt zodra we er iets in zetten.
+  async ensureStorage() {
+    // niets te doen: approot bestaat impliciet
+  },
+
+  async graphRequest(path, options = {}, allow404 = false) {
+    const res = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
+      ...options,
+      headers: { Authorization: "Bearer " + this.token, ...(options.headers || {}) },
+    });
+    if (res.status === 404 && allow404) return null;
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`OneDrive fout (${res.status}): ${text.slice(0, 200)}`);
+    }
+    return res;
+  },
+
+  async readJSON(fileName, fallback) {
+    const res = await this.graphRequest(`/me/drive/special/approot:/${encodeURIComponent(fileName)}:/content`, {}, true);
+    if (!res) return { fileId: null, data: fallback };
+    return { fileId: fileName, data: await res.json() };
+  },
+
+  async writeJSON(fileName, _fileId, data) {
+    await this.graphRequest(`/me/drive/special/approot:/${encodeURIComponent(fileName)}:/content`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data, null, 2),
+    });
+    return fileName; // OneDrive-bestanden zijn pad-gebaseerd, geen apart id nodig
+  },
+};
+
+const providers = { google: googleProvider, microsoft: microsoftProvider };
+
+// ==========================================================================
+// APPLE (alleen identiteit, geen opslag)
+// ==========================================================================
+function initApple() {
+  if (typeof AppleID === "undefined") return;
+  if (APPLE_CLIENT_ID.includes("VUL_HIER")) return;
+  try {
+    AppleID.auth.init({
+      clientId: APPLE_CLIENT_ID,
+      scope: "name email",
+      redirectURI: APPLE_REDIRECT_URI,
+      usePopup: true,
+    });
+  } catch (e) {
+    console.warn("Apple-configuratie kon niet worden geïnitialiseerd", e);
+  }
+}
+
+function decodeJWT(token) {
+  const payload = token.split(".")[1];
+  const json = decodeURIComponent(
+    atob(payload.replace(/-/g, "+").replace(/_/g, "/"))
+      .split("")
+      .map((c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0"))
+      .join("")
+  );
+  return JSON.parse(json);
+}
+
+async function appleSignIn() {
+  if (APPLE_CLIENT_ID.includes("VUL_HIER") || APPLE_REDIRECT_URI.includes("VUL_HIER")) {
+    throw new Error("Er is nog geen Apple Services ID ingevuld in config.js (vereist een betaald Apple Developer account). Zie README.md.");
+  }
+  if (typeof AppleID === "undefined") {
+    throw new Error("Apple-inlogbibliotheek kon niet geladen worden. Controleer je internetverbinding.");
+  }
+  const resp = await AppleID.auth.signIn();
+  const idToken = resp.authorization && resp.authorization.id_token;
+  if (!idToken) throw new Error("Geen identiteitsgegevens ontvangen van Apple.");
+  const claims = decodeJWT(idToken);
+  let name = "";
+  if (resp.user && resp.user.name) {
+    name = [resp.user.name.firstName, resp.user.name.lastName].filter(Boolean).join(" ");
+  }
+  return { email: claims.email || "", name };
+}
+
+// ==========================================================================
+// LOGIN WIRING
+// ==========================================================================
+function setupLoginButtons() {
+  document.getElementById("login-google").addEventListener("click", () => doProviderLogin("google"));
+  document.getElementById("login-microsoft").addEventListener("click", () => doProviderLogin("microsoft"));
+  document.getElementById("login-apple").addEventListener("click", doAppleLogin);
+  document.getElementById("pick-google").addEventListener("click", () => doProviderLogin("google", true));
+  document.getElementById("pick-microsoft").addEventListener("click", () => doProviderLogin("microsoft", true));
+  document.getElementById("pick-cancel").addEventListener("click", () => {
+    document.getElementById("storage-picker").classList.add("hidden");
+    document.getElementById("login-buttons").classList.remove("hidden");
+    showLoginError("");
   });
 
   document.getElementById("logout-btn").addEventListener("click", () => {
-    if (state.token) {
-      google.accounts.oauth2.revoke(state.token, () => {});
-    }
-    sessionStorage.removeItem("gd_token");
-    sessionStorage.removeItem("gd_token_exp");
-    state.token = null;
+    const p = activeProvider();
+    if (p) p.logout();
+    sessionStorage.removeItem("active_provider");
     location.reload();
   });
+}
 
-  // Probeer een bewaarde sessie te hergebruiken (binnen dezelfde browsertab)
-  const savedToken = sessionStorage.getItem("gd_token");
-  const savedExp = Number(sessionStorage.getItem("gd_token_exp") || 0);
-  if (savedToken && savedExp > Date.now()) {
-    state.token = savedToken;
-    state.tokenExpiresAt = savedExp;
-    afterLogin();
+async function doProviderLogin(providerId, keepIdentityLabel = false) {
+  showLoginError("");
+  const provider = providers[providerId];
+  if (!provider) return;
+  try {
+    setSyncStatus("Inloggen...");
+    await provider.login();
+    await provider.ensureStorage();
+    state.activeProviderId = providerId;
+    if (!keepIdentityLabel) state.identity = { label: provider.name };
+    sessionStorage.setItem("active_provider", providerId);
+    setSyncStatus("");
+    await afterLogin();
+  } catch (err) {
+    console.error(err);
+    setSyncStatus("");
+    showLoginError("Inloggen mislukt: " + err.message);
+  }
+}
+
+async function doAppleLogin() {
+  showLoginError("");
+  try {
+    const identity = await appleSignIn();
+    state.identity = { label: identity.name || identity.email || "Apple-account" };
+    document.getElementById("apple-identity-label").textContent = state.identity.label;
+    document.getElementById("login-buttons").classList.add("hidden");
+    document.getElementById("storage-picker").classList.remove("hidden");
+  } catch (err) {
+    console.error(err);
+    showLoginError(err.message);
   }
 }
 
@@ -102,19 +400,31 @@ function showLoginError(msg) {
   document.getElementById("login-error").textContent = msg;
 }
 
+async function tryRestoreSession() {
+  const savedProviderId = sessionStorage.getItem("active_provider");
+  if (!savedProviderId) return false;
+  const provider = providers[savedProviderId];
+  if (!provider) return false;
+  const ok = await provider.restoreSession();
+  if (!ok) return false;
+  state.activeProviderId = savedProviderId;
+  state.identity = { label: provider.name };
+  return true;
+}
+
 async function afterLogin() {
   document.getElementById("login-screen").classList.add("hidden");
   document.getElementById("app").classList.remove("hidden");
+  document.getElementById("account-label").textContent = "Opgeslagen in: " + state.identity.label;
   setSyncStatus("Synchroniseren...");
   try {
-    await ensureAppFolder();
     await loadAllData();
     setSyncStatus("");
     renderView();
   } catch (err) {
     console.error(err);
     setSyncStatus("");
-    toast("Fout bij laden van Google Drive: " + err.message);
+    toast("Fout bij laden van je opslag: " + err.message);
   }
 }
 
@@ -123,111 +433,14 @@ function setSyncStatus(txt) {
 }
 
 // ==========================================================================
-// GOOGLE DRIVE HELPERS
-// ==========================================================================
-async function driveFetch(url, options = {}) {
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      Authorization: "Bearer " + state.token,
-      ...(options.headers || {}),
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Drive API fout (${res.status}): ${text.slice(0, 200)}`);
-  }
-  return res;
-}
-
-async function driveFindByName(name, parentId) {
-  const q = encodeURIComponent(
-    `name='${name.replace(/'/g, "\\'")}' and trashed=false` +
-      (parentId ? ` and '${parentId}' in parents` : "")
-  );
-  const res = await driveFetch(
-    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&spaces=drive`
-  );
-  const data = await res.json();
-  return data.files && data.files.length ? data.files[0] : null;
-}
-
-async function ensureAppFolder() {
-  const cached = sessionStorage.getItem("gd_folder_id");
-  if (cached) {
-    state.folderId = cached;
-    return;
-  }
-  let folder = await driveFindByName(APP_FOLDER_NAME, null);
-  if (!folder) {
-    const res = await driveFetch("https://www.googleapis.com/drive/v3/files", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: APP_FOLDER_NAME,
-        mimeType: "application/vnd.google-apps.folder",
-      }),
-    });
-    folder = await res.json();
-  }
-  state.folderId = folder.id;
-  sessionStorage.setItem("gd_folder_id", folder.id);
-}
-
-async function driveReadJSON(fileName, fallback) {
-  const file = await driveFindByName(fileName, state.folderId);
-  if (!file) return { fileId: null, data: fallback };
-  const res = await driveFetch(
-    `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`
-  );
-  const data = await res.json();
-  return { fileId: file.id, data };
-}
-
-async function driveWriteJSON(fileName, fileId, data) {
-  const content = JSON.stringify(data, null, 2);
-  if (fileId) {
-    await driveFetch(
-      `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: content,
-      }
-    );
-    return fileId;
-  } else {
-    const boundary = "-------facturenapp" + Date.now();
-    const metadata = { name: fileName, parents: [state.folderId] };
-    const body =
-      `--${boundary}\r\n` +
-      `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
-      `${JSON.stringify(metadata)}\r\n` +
-      `--${boundary}\r\n` +
-      `Content-Type: application/json\r\n\r\n` +
-      `${content}\r\n` +
-      `--${boundary}--`;
-    const res = await driveFetch(
-      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
-      {
-        method: "POST",
-        headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
-        body,
-      }
-    );
-    const created = await res.json();
-    return created.id;
-  }
-}
-
-// ==========================================================================
-// STORE (settings / clients / invoices)
+// STORE (settings / clients / invoices) - provider-onafhankelijk
 // ==========================================================================
 async function loadAllData() {
+  const p = activeProvider();
   const [settingsRes, clientsRes, invoicesRes] = await Promise.all([
-    driveReadJSON("settings.json", DEFAULT_SETTINGS),
-    driveReadJSON("clients.json", []),
-    driveReadJSON("invoices.json", []),
+    p.readJSON("settings.json", DEFAULT_SETTINGS),
+    p.readJSON("clients.json", []),
+    p.readJSON("invoices.json", []),
   ]);
   state.settings = { ...DEFAULT_SETTINGS, ...settingsRes.data };
   state.fileIds.settings = settingsRes.fileId;
@@ -239,19 +452,19 @@ async function loadAllData() {
 
 async function saveSettings() {
   setSyncStatus("Opslaan...");
-  state.fileIds.settings = await driveWriteJSON("settings.json", state.fileIds.settings, state.settings);
+  state.fileIds.settings = await activeProvider().writeJSON("settings.json", state.fileIds.settings, state.settings);
   setSyncStatus("");
 }
 
 async function saveClients() {
   setSyncStatus("Opslaan...");
-  state.fileIds.clients = await driveWriteJSON("clients.json", state.fileIds.clients, state.clients);
+  state.fileIds.clients = await activeProvider().writeJSON("clients.json", state.fileIds.clients, state.clients);
   setSyncStatus("");
 }
 
 async function saveInvoices() {
   setSyncStatus("Opslaan...");
-  state.fileIds.invoices = await driveWriteJSON("invoices.json", state.fileIds.invoices, state.invoices);
+  state.fileIds.invoices = await activeProvider().writeJSON("invoices.json", state.fileIds.invoices, state.invoices);
   setSyncStatus("");
 }
 
@@ -283,7 +496,7 @@ function bumpNumberCounterIfMatches(type, usedNumber) {
 }
 
 function calcTotals(items) {
-  const groups = {}; // vatRate -> { subtotal, vat }
+  const groups = {};
   let subtotal = 0;
   for (const it of items) {
     const qty = Number(it.qty) || 0;
@@ -382,7 +595,6 @@ function renderNewView() {
   title.textContent = draft.__editing ? "Bewerken" : "Nieuwe factuur / offerte";
   wrap.appendChild(title);
 
-  // Type toggle
   const typeToggle = document.createElement("div");
   typeToggle.className = "type-toggle";
   ["factuur", "offerte"].forEach((t) => {
@@ -403,7 +615,6 @@ function renderNewView() {
   const card = document.createElement("div");
   card.className = "card";
 
-  // Klant kiezen
   const clientField = document.createElement("div");
   clientField.className = "field";
   clientField.innerHTML = `<label>Klant</label>`;
@@ -444,7 +655,6 @@ function renderNewView() {
 
   wrap.appendChild(card);
 
-  // Nummer, datum, termijn, status
   const card2 = document.createElement("div");
   card2.className = "card";
   const row3 = document.createElement("div");
@@ -503,7 +713,6 @@ function renderNewView() {
   card2.appendChild(row4);
   wrap.appendChild(card2);
 
-  // Regels
   const card3 = document.createElement("div");
   card3.className = "card";
   card3.innerHTML = `<h2>Regels</h2>`;
@@ -532,13 +741,11 @@ function renderNewView() {
   card3.appendChild(totalsBox);
   wrap.appendChild(card3);
 
-  // Notities
   const card4 = document.createElement("div");
   card4.className = "card";
   card4.appendChild(makeTextAreaField("Notities (optioneel, komt op de " + draft.type + ")", draft.notes, (v) => (draft.notes = v)));
   wrap.appendChild(card4);
 
-  // Acties
   const actions = document.createElement("div");
   actions.className = "row";
   const saveBtn = document.createElement("button");
@@ -683,7 +890,6 @@ function updateLineTotal(idx) {
   const item = draft.items[idx];
   const el = document.getElementById("line-total-" + idx);
   if (el) el.textContent = fmtMoney((Number(item.qty) || 0) * (Number(item.price) || 0));
-  // Totalen-blok live bijwerken zonder hele view te her-renderen (voorkomt focus-verlies)
   const totals = calcTotals(draft.items);
   const totalsBox = document.querySelector(".totals-box");
   if (totalsBox) {
@@ -866,10 +1072,7 @@ function getFilteredInvoices() {
     .filter((inv) => {
       if (!f.q.trim()) return true;
       const q = f.q.trim().toLowerCase();
-      return (
-        inv.number.toLowerCase().includes(q) ||
-        (inv.clientSnapshot.name || "").toLowerCase().includes(q)
-      );
+      return inv.number.toLowerCase().includes(q) || (inv.clientSnapshot.name || "").toLowerCase().includes(q);
     })
     .sort((a, b) => (b.date > a.date ? 1 : -1));
 }
@@ -1092,6 +1295,11 @@ function renderSettingsView() {
   card2.appendChild(hint);
   wrap.appendChild(card2);
 
+  const card3 = document.createElement("div");
+  card3.className = "card";
+  card3.innerHTML = `<h2>Opslag</h2><p style="color:#667085;font-size:0.9rem;">Je bent ingelogd via <strong>${state.identity.label}</strong>. Facturen, offertes en klanten worden bewaard in jouw eigen account en zijn niet zichtbaar voor andere gebruikers van deze app.</p>`;
+  wrap.appendChild(card3);
+
   const saveBtn = document.createElement("button");
   saveBtn.className = "btn btn-primary";
   saveBtn.textContent = "Instellingen opslaan";
@@ -1257,10 +1465,31 @@ function generatePDF(inv) {
 // ==========================================================================
 // INIT
 // ==========================================================================
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
   setupNav();
-  initAuth();
-  // state.draft wordt pas aangemaakt nadat instellingen zijn geladen
-  // (zie afterLogin -> renderView / renderNewView), omdat de nummering
-  // en standaard betalingstermijn afhankelijk zijn van state.settings.
+  setupLoginButtons();
+  try {
+    googleProvider.init();
+  } catch (e) {
+    console.warn("Google-configuratie kon niet worden geïnitialiseerd", e);
+  }
+  try {
+    microsoftProvider.init();
+  } catch (e) {
+    console.warn("Microsoft-configuratie kon niet worden geïnitialiseerd", e);
+  }
+  try {
+    initApple();
+  } catch (e) {
+    console.warn("Apple-configuratie kon niet worden geïnitialiseerd", e);
+  }
+
+  try {
+    const restored = await tryRestoreSession();
+    if (restored) {
+      await afterLogin();
+    }
+  } catch (e) {
+    console.warn("Sessie herstellen mislukt, toon inlogscherm", e);
+  }
 });

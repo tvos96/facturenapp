@@ -17,3 +17,27 @@ export const APP_FOLDER_NAME = "Facturen App Data";
 
 // Standaard btw-percentages die in de keuzelijst verschijnen.
 export const DEFAULT_VAT_RATES = [21, 9, 0];
+
+// --------------------------------------------------------------------------
+// MICROSOFT (Outlook / Exchange / OneDrive)
+// --------------------------------------------------------------------------
+// Vul hier je Azure "Application (client) ID" in. Zie README.md voor de
+// stap-voor-stap uitleg (gratis, Azure Portal - App registrations).
+export const MICROSOFT_CLIENT_ID = "VUL_HIER_JE_MICROSOFT_CLIENT_ID_IN";
+
+// "common" ondersteunt zowel persoonlijke Microsoft-accounts (Outlook.com,
+// Hotmail) als werk-/schoolaccounts (Microsoft 365 / Exchange).
+export const MICROSOFT_AUTHORITY = "https://login.microsoftonline.com/common";
+
+// Files.ReadWrite.AppFolder = alleen toegang tot een eigen map
+// ("OneDrive > Apps > Facturen App"), niet tot de rest van iemands OneDrive.
+export const MICROSOFT_SCOPES = ["Files.ReadWrite.AppFolder", "User.Read"];
+
+// --------------------------------------------------------------------------
+// APPLE (Inloggen met Apple - alleen identiteit, geen bestandsopslag)
+// --------------------------------------------------------------------------
+// Vereist een betaald Apple Developer Program account ($99/jaar) + een
+// geverifieerd domein. Zie README.md. Laat op de placeholder staan als je
+// dit (nog) niet gebruikt - de Apple-knop toont dan een duidelijke melding.
+export const APPLE_CLIENT_ID = "VUL_HIER_JE_APPLE_SERVICES_ID_IN"; // bv. nl.zig.facturenapp.web
+export const APPLE_REDIRECT_URI = "VUL_HIER_JE_GEHOSTE_APP_URL_IN"; // exact zoals bij Apple geconfigureerd, bv. https://tvos96.github.io/facturenapp/
