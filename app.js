@@ -21,6 +21,12 @@ const state = {
   view: "new",
   draft: null,
   archiveFilter: { type: "alle", status: "alle", q: "" },
+  // PDF-voorvertoning ("Bekijken"): in-app te tonen i.p.v. een nieuw
+  // tabblad, want op telefoon/iPad (vooral als "zet op beginscherm"-app,
+  // zonder tabbladen) is er anders geen duidelijke weg terug.
+  pdfPreviewUrl: null,
+  pdfPreviewName: "",
+  pdfPreviewReturnView: "new",
 };
 
 const DEFAULT_SETTINGS = {
@@ -736,6 +742,10 @@ function setupNav() {
       if (view === "new" && (!state.draft || state.draft.__saved)) {
         state.draft = emptyDraft();
       }
+      if (state.view === "preview" && state.pdfPreviewUrl) {
+        URL.revokeObjectURL(state.pdfPreviewUrl);
+        state.pdfPreviewUrl = null;
+      }
       state.view = view;
       renderView();
     });
@@ -762,6 +772,8 @@ function renderView() {
   else if (state.view === "archive") root.appendChild(renderArchiveView());
   else if (state.view === "clients") root.appendChild(renderClientsView());
   else if (state.view === "settings") root.appendChild(renderSettingsView());
+  else if (state.view === "preview") root.appendChild(renderPreviewView());
+  else if (state.view === "help") root.appendChild(renderHelpView());
 }
 
 // ==========================================================================
@@ -1094,7 +1106,7 @@ function renderNewView() {
   actions.appendChild(saveBtn);
 
   const viewBtn = document.createElement("button");
-  viewBtn.className = "btn btn-ghost";
+  viewBtn.className = "btn btn-secondary";
   viewBtn.textContent = "Bekijken";
   viewBtn.addEventListener("click", () => withBusy(viewBtn, () => previewPDF(draft)));
   actions.appendChild(viewBtn);
@@ -1619,7 +1631,7 @@ function renderArchiveList(list) {
     actions.className = "actions";
 
     const viewBtn = document.createElement("button");
-    viewBtn.className = "btn btn-ghost btn-sm";
+    viewBtn.className = "btn btn-secondary btn-sm";
     viewBtn.textContent = "Bekijken";
     viewBtn.addEventListener("click", () => withBusy(viewBtn, () => previewPDF(inv)));
     actions.appendChild(viewBtn);
@@ -2122,6 +2134,189 @@ function resizeImageToDataUrl(file, maxWidth) {
 }
 
 // ==========================================================================
+// VIEW: HELP / HANDLEIDING
+// ==========================================================================
+// Beknopte handleiding, in twee groepen en gerangschikt van belangrijk naar
+// minder belangrijk. Als <details>/<summary> (native, toegankelijk, geen
+// eigen JS nodig voor open/dicht) zodat het ook op een telefoonscherm
+// overzichtelijk en snel doorzoekbaar blijft i.p.v. één lange lap tekst.
+const HELP_CONTENT = [
+  {
+    group: "Basis: dit heb je elke keer nodig",
+    items: [
+      {
+        title: "1. Inloggen",
+        points: [
+          "Log in met je Google- of Microsoft-account (Outlook, Hotmail, Microsoft 365/Exchange).",
+          "Alles wat je aanmaakt (facturen, offertes, klanten, PDF's) wordt bewaard in jouw eigen cloudopslag. Iedereen die inlogt ziet alleen zijn eigen archief.",
+        ],
+      },
+      {
+        title: "2. Bedrijfsgegevens instellen",
+        points: [
+          "Doe dit als eerste, voordat je een factuur maakt — zonder deze gegevens ontbreken ze op je PDF.",
+          "Ga naar Instellingen en vul in: bedrijfsnaam, adres, logo en accentkleur (voor de PDF-opmaak).",
+          "Btw-nummer, KvK-nummer, IBAN, banknaam, BIC/SWIFT, telefoonnummer en e-mailadres.",
+          "Standaard betalingstermijn en standaard valuta gelden als basis voor elke nieuwe factuur/offerte, maar zijn per document aan te passen.",
+        ],
+      },
+      {
+        title: "3. Een nieuwe factuur of offerte maken",
+        points: [
+          "Kies bovenaan het type: Factuur of Offerte.",
+          "Kies een bestaande klant of vul de klantgegevens direct in.",
+          "Kies de taal (Nederlands/Engels) en de valuta van dit document.",
+          "Datum, betalingstermijn en vervaldatum worden automatisch berekend, maar zijn los aan te passen; een handmatige vervaldatum wordt niet meer overschreven.",
+          "Voeg regels toe met een omschrijving, optioneel een periode (“Van”/“Tot”), aantal, eenheid, prijs en btw-percentage.",
+          "Voeg optioneel een notitie toe, of kies een kant-en-klaar notitiesjabloon.",
+        ],
+      },
+      {
+        title: "4. Bekijken, downloaden en opslaan",
+        points: [
+          "Bekijken toont de PDF direct in de app, met een Terug-knop — handig om snel te controleren zonder te downloaden.",
+          "Download PDF downloadt het bestand en slaat automatisch een kopie op in je cloudopslag.",
+          "Opslaan in archief bewaart de factuur/offerte zodat je hem later terugvindt en kunt bewerken.",
+        ],
+      },
+      {
+        title: "5. Archief beheren",
+        points: [
+          "Filter op type (factuur/offerte), status, of zoek op klantnaam/nummer.",
+          "Wijzig de status direct in de lijst (bijvoorbeeld: concept → verzonden → betaald).",
+          "Per factuur/offerte: Bekijken, PDF downloaden, Bewerken, Dupliceren (nieuwe kopie met nieuw nummer) of Verwijderen.",
+        ],
+      },
+      {
+        title: "6. Klanten beheren",
+        points: [
+          "Voeg klanten toe, bewerk of verwijder ze via het tabblad Klanten.",
+          "Sla vanuit een factuur/offerte de ingevulde klantgegevens direct op als (nieuwe) klant.",
+          "De app waarschuwt als je een klantnaam gebruikt die al bestaat.",
+        ],
+      },
+      {
+        title: "7. Notitiesjablonen",
+        points: [
+          "Maak in Instellingen kant-en-klare teksten voor het notitieveld, telkens in het Nederlands én Engels.",
+          "Wijs één sjabloon aan als standaard: die wordt automatisch ingevuld bij een nieuwe factuur/offerte.",
+          "Wissel je van documenttaal terwijl de tekst nog exact overeenkomt met een sjabloon, dan wisselt de tekst automatisch mee.",
+        ],
+      },
+    ],
+  },
+  {
+    group: "Extra's en achtergrond",
+    items: [
+      {
+        title: "8. Controles en waarschuwingen",
+        points: [
+          "Melding bij een factuur-/offertenummer dat al bestaat, of een regel zonder omschrijving.",
+          "Melding bij niet-opgeslagen wijzigingen in Instellingen als je wegnavigeert of het tabblad sluit.",
+          "Eigen btw-percentage en eigen valutacode worden gecontroleerd op een geldige invoer.",
+        ],
+      },
+      {
+        title: "9. Installeren als app",
+        points: ["Op iPhone/iPad: gebruik “Zet op beginscherm” in de browser om de app als icoon toe te voegen."],
+      },
+      {
+        title: "10. Overige details",
+        points: [
+          "PDF's worden automatisch over meerdere pagina's verdeeld als de inhoud niet op één pagina past.",
+          "Formuliervelden zijn gekoppeld aan hun labels en pop-ups zijn te sluiten met Escape, voor gebruik met een schermlezer of toetsenbord.",
+          "Knoppen worden kort uitgeschakeld tijdens het opslaan of genereren van een PDF, zodat je niet twee keer per ongeluk dezelfde actie start.",
+        ],
+      },
+    ],
+  },
+];
+
+function renderHelpView() {
+  const wrap = document.createElement("div");
+  const title = document.createElement("div");
+  title.className = "section-title";
+  title.textContent = "Help";
+  wrap.appendChild(title);
+
+  const intro = document.createElement("p");
+  intro.className = "help-intro";
+  intro.textContent =
+    "Beknopt overzicht van alle functies, gerangschikt van belangrijk (dagelijks gebruik) naar minder belangrijk (extra's en achtergrond). Tik op een onderwerp om het open te klappen.";
+  wrap.appendChild(intro);
+
+  HELP_CONTENT.forEach((group, groupIdx) => {
+    const groupTitle = document.createElement("div");
+    groupTitle.className = "help-group-title";
+    groupTitle.textContent = group.group;
+    wrap.appendChild(groupTitle);
+
+    group.items.forEach((item, itemIdx) => {
+      const details = document.createElement("details");
+      details.className = "help-item";
+      // Het allereerste (belangrijkste) onderwerp staat standaard open, de
+      // rest dicht - zo blijft de lijst op een telefoon overzichtelijk.
+      if (groupIdx === 0 && itemIdx === 0) details.open = true;
+      const summary = document.createElement("summary");
+      summary.textContent = item.title;
+      details.appendChild(summary);
+      const list = document.createElement("div");
+      list.className = "help-points";
+      item.points.forEach((p) => {
+        const row = document.createElement("p");
+        row.textContent = p;
+        list.appendChild(row);
+      });
+      details.appendChild(list);
+      wrap.appendChild(details);
+    });
+  });
+
+  return wrap;
+}
+
+// ==========================================================================
+// VIEW: PDF-VOORVERTONING
+// ==========================================================================
+// Toont de PDF in de app zelf (i.p.v. een nieuw tabblad) met een duidelijke
+// terugknop - op telefoon/iPad (zeker als "zet op beginscherm"-app, zonder
+// tabbladen/adresbalk) is een nieuw tabblad anders een doodlopende weg.
+function renderPreviewView() {
+  const wrap = document.createElement("div");
+  wrap.className = "preview-view";
+
+  const bar = document.createElement("div");
+  bar.className = "preview-bar";
+  const backBtn = document.createElement("button");
+  backBtn.className = "btn btn-secondary btn-sm";
+  backBtn.textContent = "← Terug";
+  backBtn.addEventListener("click", () => closePdfPreview());
+  bar.appendChild(backBtn);
+  const nameLabel = document.createElement("span");
+  nameLabel.className = "preview-name";
+  nameLabel.textContent = state.pdfPreviewName;
+  bar.appendChild(nameLabel);
+  wrap.appendChild(bar);
+
+  const frame = document.createElement("iframe");
+  frame.className = "preview-frame";
+  frame.title = state.pdfPreviewName || "PDF-voorvertoning";
+  frame.src = state.pdfPreviewUrl;
+  wrap.appendChild(frame);
+
+  return wrap;
+}
+
+function closePdfPreview() {
+  if (state.pdfPreviewUrl) {
+    URL.revokeObjectURL(state.pdfPreviewUrl);
+    state.pdfPreviewUrl = null;
+  }
+  state.view = state.pdfPreviewReturnView || "new";
+  renderView();
+}
+
+// ==========================================================================
 // PDF GENERATIE
 // ==========================================================================
 const PDF_I18N = {
@@ -2426,17 +2621,23 @@ async function generatePDF(inv) {
   }
 }
 
-// "Bekijken"-knop: bouwt dezelfde PDF, maar opent 'm als voorvertoning in
-// een nieuw tabblad (blob-URL) i.p.v. te downloaden of te uploaden - handig
-// om snel te controleren hoe de factuur/offerte eruitziet zonder meteen
-// een bestand op schijf te zetten.
+// "Bekijken"-knop: bouwt dezelfde PDF, maar toont 'm als voorvertoning
+// bínnen de app (i.p.v. een nieuw tabblad) - handig om snel te controleren
+// hoe de factuur/offerte eruitziet zonder meteen een bestand op schijf te
+// zetten. Op telefoon/iPad (zeker als "zet op beginscherm"-app, zonder
+// tabbladen/adresbalk) geeft een nieuw tabblad anders geen duidelijke weg
+// terug naar het archief.
 function previewPDF(inv) {
   const doc = buildInvoicePDF(inv);
-  const blobUrl = doc.output("bloburl");
-  const win = window.open(blobUrl, "_blank");
-  if (!win) {
-    toast("Kon de PDF-voorvertoning niet openen. Controleer of pop-ups zijn geblokkeerd voor deze site.");
+  const blob = doc.output("blob");
+  if (state.pdfPreviewUrl) {
+    URL.revokeObjectURL(state.pdfPreviewUrl);
   }
+  state.pdfPreviewUrl = URL.createObjectURL(blob);
+  state.pdfPreviewName = `${inv.number}.pdf`;
+  state.pdfPreviewReturnView = state.view === "preview" ? state.pdfPreviewReturnView : state.view;
+  state.view = "preview";
+  renderView();
 }
 
 // ==========================================================================

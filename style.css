@@ -93,6 +93,40 @@ button, input, select, textarea {
   margin: 0 auto;
 }
 
+/* ---------- PDF-voorvertoning ("Bekijken") ---------- */
+/* In-app tonen i.p.v. een nieuw tabblad, met een duidelijke terugknop: op
+   telefoon/iPad (zeker als "zet op beginscherm"-app, zonder tabbladen) is
+   een nieuw tabblad anders een doodlopende weg. */
+.preview-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 60vh;
+}
+.preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+.preview-name {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 400px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+}
+
 .bottom-nav {
   position: fixed;
   bottom: 0;
@@ -155,6 +189,59 @@ button, input, select, textarea {
 .btn-sm { padding: 6px 12px; font-size: 0.85rem; }
 .btn-block { width: 100%; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---------- Help / handleiding ---------- */
+.help-intro {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+  margin: 0 0 18px;
+  max-width: 640px;
+}
+.help-group-title {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 22px 0 8px;
+}
+.help-group-title:first-of-type { margin-top: 0; }
+.help-item {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px 14px;
+  margin-bottom: 8px;
+}
+.help-item summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 12px 0;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.help-item summary::-webkit-details-marker { display: none; }
+.help-item summary::after {
+  content: "+";
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 1.1rem;
+  margin-left: 12px;
+  flex-shrink: 0;
+}
+.help-item[open] summary::after { content: "−"; }
+.help-points { padding: 0 0 14px; }
+.help-points p {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+.help-points p:last-child { margin-bottom: 0; }
 
 /* ---------- Cards / sections ---------- */
 .card {
@@ -333,7 +420,19 @@ button, input, select, textarea {
 .archive-row .num { font-weight: 700; }
 .archive-row .sub { font-size: 0.82rem; color: var(--text-muted); }
 .archive-row .amount { font-weight: 700; min-width: 90px; text-align: right; }
-.archive-row .actions { display: flex; gap: 6px; }
+.archive-row .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* Op smalle schermen is er simpelweg niet genoeg breedte voor 5
+   actieknoppen naast de rest van de rij - laat de hele rij dan als
+   kaart onder elkaar staan, met de knoppen in een eigen, volledig
+   brede regel die zelf ook mag wrappen. Zo valt er nooit meer iets
+   (onzichtbaar) buiten beeld aan de rechterkant. */
+@media (max-width: 700px) {
+  .archive-row { flex-direction: column; align-items: stretch; }
+  .archive-row .amount { text-align: left; min-width: 0; }
+  .archive-row .status-select { width: 100%; }
+  .archive-row .actions { width: 100%; }
+}
 
 .empty-state { text-align: center; color: var(--text-muted); padding: 40px 12px; }
 
