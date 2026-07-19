@@ -126,6 +126,14 @@ button, input, select, textarea {
   border-radius: 10px;
   background: #fff;
 }
+/* Zelfde breakpoint als waarop de rest van de app al naar de "laptop"-opzet
+   schakelt (topbalk-tabs i.p.v. onderbalk) - alleen dán mag de voorvertoning
+   flink groter, vooral in hoogte, zodat de PDF in één oogopslag te zien is.
+   Telefoon/tablet (onder deze breedte) blijft ongewijzigd. */
+@media (min-width: 800px) {
+  .preview-view { min-height: 85vh; }
+  .preview-frame { min-height: 85vh; }
+}
 
 .bottom-nav {
   position: fixed;

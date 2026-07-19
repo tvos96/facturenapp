@@ -2245,18 +2245,16 @@ function renderHelpView() {
     "Beknopt overzicht van alle functies, gerangschikt van belangrijk (dagelijks gebruik) naar minder belangrijk (extra's en achtergrond). Tik op een onderwerp om het open te klappen.";
   wrap.appendChild(intro);
 
-  HELP_CONTENT.forEach((group, groupIdx) => {
+  HELP_CONTENT.forEach((group) => {
     const groupTitle = document.createElement("div");
     groupTitle.className = "help-group-title";
     groupTitle.textContent = group.group;
     wrap.appendChild(groupTitle);
 
-    group.items.forEach((item, itemIdx) => {
+    group.items.forEach((item) => {
       const details = document.createElement("details");
       details.className = "help-item";
-      // Het allereerste (belangrijkste) onderwerp staat standaard open, de
-      // rest dicht - zo blijft de lijst op een telefoon overzichtelijk.
-      if (groupIdx === 0 && itemIdx === 0) details.open = true;
+      // Standaard alles ingeklapt, zodat de lijst overzichtelijk blijft.
       const summary = document.createElement("summary");
       summary.textContent = item.title;
       details.appendChild(summary);
