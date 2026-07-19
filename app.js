@@ -1093,6 +1093,12 @@ function renderNewView() {
   saveBtn.addEventListener("click", () => withBusy(saveBtn, () => saveDraft(draft)));
   actions.appendChild(saveBtn);
 
+  const viewBtn = document.createElement("button");
+  viewBtn.className = "btn btn-ghost";
+  viewBtn.textContent = "Bekijken";
+  viewBtn.addEventListener("click", () => withBusy(viewBtn, () => previewPDF(draft)));
+  actions.appendChild(viewBtn);
+
   const pdfBtn = document.createElement("button");
   pdfBtn.className = "btn btn-secondary";
   pdfBtn.textContent = "Download PDF";
@@ -1611,6 +1617,12 @@ function renderArchiveList(list) {
 
     const actions = document.createElement("div");
     actions.className = "actions";
+
+    const viewBtn = document.createElement("button");
+    viewBtn.className = "btn btn-ghost btn-sm";
+    viewBtn.textContent = "Bekijken";
+    viewBtn.addEventListener("click", () => withBusy(viewBtn, () => previewPDF(inv)));
+    actions.appendChild(viewBtn);
 
     const pdfBtn = document.createElement("button");
     pdfBtn.className = "btn btn-secondary btn-sm";
@@ -2169,7 +2181,11 @@ function pdfT(lang) {
   return PDF_I18N[lang] || PDF_I18N.nl;
 }
 
-async function generatePDF(inv) {
+// Bouwt het jsPDF-document op (alle tekencode) en geeft het terug, zonder
+// het te downloaden of te uploaden - zo kan zowel de "Download PDF"-knop
+// (generatePDF) als de "Bekijken"-knop (previewPDF) dezelfde opbouw
+// hergebruiken.
+function buildInvoicePDF(inv) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const s = state.settings;
@@ -2386,6 +2402,13 @@ async function generatePDF(inv) {
     doc.text(t.paymentNote(fmtDate(inv.dueDate), s.iban, inv.number), marginX, finalY);
   }
 
+  return doc;
+}
+
+// Download-knop: bouwt de PDF, downloadt 'm en slaat een kopie op in de
+// cloudopslag (Drive/OneDrive), zoals voorheen.
+async function generatePDF(inv) {
+  const doc = buildInvoicePDF(inv);
   doc.save(`${inv.number}.pdf`);
 
   // Ook een kopie van de PDF opslaan in dezelfde cloudmap als de gegevens,
@@ -2400,6 +2423,19 @@ async function generatePDF(inv) {
       console.warn("PDF uploaden naar cloudopslag mislukt", err);
       toast("PDF is gedownload, maar kon niet naar " + provider.name + " worden geüpload: " + err.message);
     }
+  }
+}
+
+// "Bekijken"-knop: bouwt dezelfde PDF, maar opent 'm als voorvertoning in
+// een nieuw tabblad (blob-URL) i.p.v. te downloaden of te uploaden - handig
+// om snel te controleren hoe de factuur/offerte eruitziet zonder meteen
+// een bestand op schijf te zetten.
+function previewPDF(inv) {
+  const doc = buildInvoicePDF(inv);
+  const blobUrl = doc.output("bloburl");
+  const win = window.open(blobUrl, "_blank");
+  if (!win) {
+    toast("Kon de PDF-voorvertoning niet openen. Controleer of pop-ups zijn geblokkeerd voor deze site.");
   }
 }
 
