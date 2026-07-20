@@ -2175,7 +2175,7 @@ const HELP_CONTENT = [
         title: "4. Bekijken, downloaden en opslaan",
         points: [
           "Bekijken toont de PDF direct in de app, met een Terug-knop — handig om snel te controleren zonder te downloaden.",
-          "Download PDF downloadt het bestand en slaat automatisch een kopie op in je cloudopslag.",
+          "Download PDF slaat automatisch een kopie op in je cloudopslag; op telefoon/tablet opent dit meestal het \"Delen\"-scherm van je toestel (opslaan in Bestanden, AirDrop, e-mail), op een laptop volgt gewoon een normale download.",
           "Opslaan in archief bewaart de factuur/offerte zodat je hem later terugvindt en kunt bewerken.",
         ],
       },
@@ -2598,23 +2598,55 @@ function buildInvoicePDF(inv) {
   return doc;
 }
 
-// Download-knop: bouwt de PDF, downloadt 'm en slaat een kopie op in de
-// cloudopslag (Drive/OneDrive), zoals voorheen.
+// Downloadt/deelt een PDF-blob zonder de pagina zelf te laten navigeren.
+// Op iPhone/iPad in standalone-modus ("zet op beginscherm", geen
+// adresbalk/terugknop van Safari) opent een gewone download-link de PDF
+// vaak in een volledige, systeemeigen viewer zónder weg terug - je moet dan
+// de hele app afsluiten. Het native "Delen"-scherm (Web Share API met een
+// bestand) is daar de betrouwbare oplossing: dat is een overlay die je met
+// "Annuleren" gewoon weer sluit, de pagina navigeert nooit weg. Op
+// desktop/browsers zonder bestanden-delen valt dit terug op een normale
+// downloadlink, wat daar altijd al prima werkte.
+async function downloadOrShareBlob(blob, filename) {
+  const file = new File([blob], filename, { type: "application/pdf" });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: filename });
+      return;
+    } catch (err) {
+      if (err && err.name === "AbortError") return; // gebruiker koos "Annuleren"
+      console.warn("Delen mislukt, val terug op downloaden", err);
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// Download-knop: bouwt de PDF, biedt 'm aan om op te slaan/delen (zie
+// downloadOrShareBlob hierboven) en slaat een kopie op in de cloudopslag
+// (Drive/OneDrive).
 async function generatePDF(inv) {
   const doc = buildInvoicePDF(inv);
-  doc.save(`${inv.number}.pdf`);
+  const blob = doc.output("blob");
+  await downloadOrShareBlob(blob, `${inv.number}.pdf`);
 
   // Ook een kopie van de PDF opslaan in dezelfde cloudmap als de gegevens,
   // zodat je 'm ook terugvindt naast settings.json/invoices.json. Dit mag
-  // de download zelf nooit blokkeren, dus alleen een toast bij mislukking.
+  // de download/deel-actie zelf nooit blokkeren, dus alleen een toast bij
+  // mislukking.
   const provider = activeProvider();
   if (provider && provider.writeBinary) {
     try {
-      const blob = doc.output("blob");
       await provider.writeBinary(`${inv.number}.pdf`, blob);
     } catch (err) {
       console.warn("PDF uploaden naar cloudopslag mislukt", err);
-      toast("PDF is gedownload, maar kon niet naar " + provider.name + " worden geüpload: " + err.message);
+      toast("PDF is opgeslagen, maar kon niet naar " + provider.name + " worden geüpload: " + err.message);
     }
   }
 }
